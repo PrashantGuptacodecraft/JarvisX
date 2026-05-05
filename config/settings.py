@@ -26,6 +26,7 @@ JARVIS_NAME  = os.getenv("JARVIS_NAME",  "Jarvis")
 USER_NAME    = os.getenv("USER_NAME",    "Sir")
 WAKE_WORD    = os.getenv("WAKE_WORD",    "hello jarvis").lower()
 SAFE_MODE    = os.getenv("SAFE_MODE",    "true").lower() == "true"
+OPERATOR_MODE = not SAFE_MODE
 VOICE_MODE   = os.getenv("VOICE_MODE",   "wake").lower().strip()
 VOICE_ALWAYS_ON = VOICE_MODE in {"always", "always_on", "continuous", "handsfree", "hands-free"}
 VOICE_WAKE_WORDS = [

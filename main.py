@@ -9,7 +9,7 @@ import queue
 import shutil
 from pathlib import Path
 
-from config.settings import JARVIS_NAME, USER_NAME, VOICE_ALWAYS_ON, WAKE_WORD
+from config.settings import JARVIS_NAME, KNOWLEDGE_DIR, OPERATOR_MODE, USER_NAME, VOICE_ALWAYS_ON, WAKE_WORD
 from config.logger import get_logger
 
 from brain.ai_client import AIClient
@@ -51,6 +51,7 @@ def build_jarvis(gui=None, command_queue=None):
     speaker = Speaker()
     memory = MemoryManager()
     ai = AIClient()
+    files = FilesController()
 
     def notify(title, msg):
         if gui:
@@ -62,13 +63,19 @@ def build_jarvis(gui=None, command_queue=None):
         "browser": BrowserController(),
         "system": SystemController(),
         "whatsapp": WhatsAppController(memory=memory),
-        "files": FilesController(),
+        "files": files,
         "vision": VisionController(),
         "terminal": terminal,
         "web": WebController(),
         "tasks": TaskController(memory, speaker=speaker, gui_notify=notify),
         "memory": memory,
     }
+
+    try:
+        sync_result = memory.sync_knowledge_files(files, KNOWLEDGE_DIR)
+        log.info(f"Knowledge sync complete: scanned={sync_result['scanned']} saved={sync_result['saved']}")
+    except Exception as exc:
+        log.warning(f"Knowledge sync skipped: {exc}")
 
     brain = Brain(ai, tools)
     planner = AutonomousPlanner(ai, brain)
@@ -108,9 +115,11 @@ def boot_message(ai, listener, user_name: str) -> str:
     if issues:
         return f"JARVIS online in limited mode, {user_name}: " + " and ".join(issues) + "."
     if VOICE_ALWAYS_ON:
-        return f"JARVIS online. Always listening mode is active, {user_name}."
+        mode = "Operator mode is enabled." if OPERATOR_MODE else "Safe mode is enabled."
+        return f"JARVIS online. Always listening mode is active. {mode} {user_name}."
     return (
         f"JARVIS online. All systems operational. "
+        f"{'Operator mode is enabled. ' if OPERATOR_MODE else 'Safe mode is enabled. '}"
         f"Say Hello Jarvis to begin, or say always listen for hands-free mode, {user_name}."
     )
 

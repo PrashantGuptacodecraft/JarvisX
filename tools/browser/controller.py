@@ -325,6 +325,67 @@ class BrowserController:
         log.info(f"Gmail compose opened: {detail}")
         return f"Gmail compose opened - {detail}, {USER_NAME}."
 
+    def send_gmail(
+        self,
+        to: str = "",
+        subject: str = "",
+        body: str = "",
+        wait_for_page: float = 8.0,
+    ) -> str:
+        if not to:
+            return f"Who should I email, {USER_NAME}?"
+        if not body and not subject:
+            return f"What should I send in the email, {USER_NAME}?"
+
+        try:
+            import pyautogui  # noqa: F401
+        except ImportError:
+            return self.compose_gmail(to=to, subject=subject, body=body)
+
+        self.compose_gmail(to=to, subject=subject, body=body)
+        time.sleep(max(wait_for_page, 0))
+        self._focus_browser_window()
+
+        try:
+            button = self._locate_screen_text(
+                ["send", "send message"],
+                timeout=8,
+                prefer_bottom=True,
+            )
+            if button:
+                import pyautogui
+
+                pyautogui.FAILSAFE = True
+                pyautogui.PAUSE = 0.2
+                pyautogui.click(button["x"], button["y"])
+                log.info(f"Gmail message sent to {to}")
+                return f"Email sent to {to}, {USER_NAME}."
+        except Exception as exc:
+            log.warning(f"Gmail send automation failed: {exc}")
+
+        try:
+            import pyautogui
+
+            pyautogui.FAILSAFE = True
+            pyautogui.PAUSE = 0.2
+            # Gmail's official shortcut is Ctrl+Enter. First move focus to the latest compose box.
+            pyautogui.press("esc")
+            time.sleep(0.5)
+            pyautogui.hotkey("ctrl", ".")
+            time.sleep(0.5)
+            pyautogui.hotkey("ctrl", "enter")
+            time.sleep(0.6)
+            pyautogui.press("enter")
+            log.info(f"Gmail keyboard send fallback triggered for {to}")
+            return f"Email send shortcut triggered for {to}, {USER_NAME}."
+        except Exception as exc:
+            log.warning(f"Gmail keyboard fallback failed: {exc}")
+
+        return (
+            f"Gmail draft opened and prefilled for {to}, {USER_NAME}. "
+            f"I couldn't confirm the Send button automatically, so please check the compose window."
+        )
+
     def open_gmail(self) -> str:
         webbrowser.open(SITES["gmail"])
         return f"Opening Gmail, {USER_NAME}."
@@ -617,6 +678,8 @@ class BrowserController:
             return False
 
         titles = [
+            "Gmail",
+            "Mail",
             "YouTube",
             "Chrome",
             "Edge",

@@ -38,6 +38,10 @@ ACTION_WORDS = (
     "add",
     "check",
     "summarize",
+    "learn",
+    "execute",
+    "workflow",
+    "mission",
 )
 
 CONNECTOR_PATTERN = re.compile(

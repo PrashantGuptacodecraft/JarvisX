@@ -7,7 +7,7 @@ import json
 import re
 from difflib import get_close_matches
 from config.logger import get_logger
-from config.settings import KNOWLEDGE_DIR, USER_NAME
+from config.settings import KNOWLEDGE_DIR, OPERATOR_MODE, USER_NAME
 
 log = get_logger("brain")
 
@@ -37,6 +37,13 @@ INTENTS = {
     "ingest_knowledge_file": ["learn file", "ingest file", "import knowledge file", "remember this file"],
     "list_knowledge_files": ["list knowledge files", "show knowledge files", "list brain files"],
     "brain_status": ["brain status", "memory status", "knowledge status"],
+    "save_workflow": ["save workflow", "remember workflow", "create workflow"],
+    "run_workflow": ["run workflow", "start workflow", "execute workflow"],
+    "list_workflows": ["list workflows", "show workflows", "my workflows"],
+    "start_mission": ["start mission", "create mission", "save mission"],
+    "show_mission": ["show mission", "mission details", "active mission", "current mission"],
+    "list_missions": ["list missions", "show missions", "my missions"],
+    "complete_mission": ["complete mission", "finish mission", "close mission"],
     # Email compose
     "compose_email":  ["write email", "compose email", "write a mail", "compose mail",
                        "send email", "send mail", "write mail to", "email to ",
@@ -215,6 +222,20 @@ class Brain:
             return "show_project_memory", self._extract_params("show_project_memory", low, original)
         if self._looks_like_project_list(low):
             return "list_projects", self._extract_params("list_projects", low, original)
+        if self._looks_like_workflow_save(low):
+            return "save_workflow", self._extract_params("save_workflow", low, original)
+        if self._looks_like_workflow_run(low):
+            return "run_workflow", self._extract_params("run_workflow", low, original)
+        if self._looks_like_workflow_list(low):
+            return "list_workflows", self._extract_params("list_workflows", low, original)
+        if self._looks_like_mission_start(low):
+            return "start_mission", self._extract_params("start_mission", low, original)
+        if self._looks_like_mission_show(low):
+            return "show_mission", self._extract_params("show_mission", low, original)
+        if self._looks_like_mission_list(low):
+            return "list_missions", self._extract_params("list_missions", low, original)
+        if self._looks_like_mission_complete(low):
+            return "complete_mission", self._extract_params("complete_mission", low, original)
         if self._looks_like_knowledge_ingest(low):
             return "ingest_knowledge_file", self._extract_params("ingest_knowledge_file", low, original)
         if self._looks_like_knowledge_list(low):
@@ -293,6 +314,32 @@ class Brain:
     def _looks_like_project_list(self, low: str) -> bool:
         return bool(re.search(r"\b(?:list|show)\s+projects\b", low) or "my projects" in low)
 
+    def _looks_like_workflow_save(self, low: str) -> bool:
+        return bool(re.search(r"\b(?:save|remember|create)\s+workflow\b", low))
+
+    def _looks_like_workflow_run(self, low: str) -> bool:
+        return bool(re.search(r"\b(?:run|start|execute)\s+workflow\b", low))
+
+    def _looks_like_workflow_list(self, low: str) -> bool:
+        return bool(re.search(r"\b(?:list|show)\s+workflows\b", low) or "my workflows" in low)
+
+    def _looks_like_mission_start(self, low: str) -> bool:
+        return bool(re.search(r"\b(?:start|create|save)\s+mission\b", low))
+
+    def _looks_like_mission_show(self, low: str) -> bool:
+        return bool(
+            re.search(r"\b(?:show)\s+mission\b", low)
+            or "mission details" in low
+            or "active mission" in low
+            or "current mission" in low
+        )
+
+    def _looks_like_mission_list(self, low: str) -> bool:
+        return bool(re.search(r"\b(?:list|show)\s+missions\b", low) or "my missions" in low)
+
+    def _looks_like_mission_complete(self, low: str) -> bool:
+        return bool(re.search(r"\b(?:complete|finish|close)\s+mission\b", low))
+
     def _looks_like_knowledge_ingest(self, low: str) -> bool:
         return bool(
             re.search(r"\b(?:learn|ingest|import|remember)\s+(?:knowledge\s+)?file\b", low)
@@ -311,7 +358,7 @@ class Brain:
     def _looks_like_folder_open(self, low: str) -> bool:
         if "open " not in low:
             return False
-        return any(folder in low for folder in ["downloads", "desktop", "documents", "pictures", "music", "videos", "folder"])
+        return any(folder in low for folder in ["downloads", "desktop", "documents", "pictures", "music", "videos", "workspace", "folder"])
 
     def _clean_contact_name(self, value: str) -> str:
         contact = (value or "").strip()
@@ -457,6 +504,61 @@ class Brain:
             if cleaned_details:
                 p["details"] = cleaned_details
 
+        elif intent == "save_workflow":
+            body = re.sub(r'^(?:save|remember|create)\s+workflow\s+', "", original, flags=re.IGNORECASE).strip()
+            match = re.match(r'(.+?)(?:\s*[:|-]\s*|\s+that\s+)(.+)', body, flags=re.IGNORECASE)
+            if match:
+                p["name"] = match.group(1).strip(" ,.-")
+                steps_blob = match.group(2).strip()
+            else:
+                p["name"] = body.strip(" ,.-")
+                steps_blob = ""
+            if steps_blob:
+                parts = re.split(r'\s*\|\s*|\s+\bthen\b\s+|\s+\band then\b\s+', steps_blob, flags=re.IGNORECASE)
+                p["steps"] = [part.strip(" ,.-") for part in parts if part.strip(" ,.-")]
+                p["description"] = " -> ".join(p["steps"][:2]) if p.get("steps") else ""
+
+        elif intent == "run_workflow":
+            name = re.sub(r'^(?:run|start|execute)\s+workflow\s+', "", original, flags=re.IGNORECASE).strip()
+            p["name"] = name.strip(" ,.-")
+
+        elif intent == "list_workflows":
+            p["text"] = original
+
+        elif intent == "start_mission":
+            body = re.sub(r'^(?:start|create|save)\s+mission\s+', "", original, flags=re.IGNORECASE).strip()
+            match = re.match(r'(.+?)(?:\s*[:|-]\s*|\s+that\s+|\s+to\s+)(.+)', body, flags=re.IGNORECASE)
+            if match:
+                p["name"] = match.group(1).strip(" ,.-")
+                p["objective"] = match.group(2).strip()
+            else:
+                p["name"] = body.strip(" ,.-")
+                p["objective"] = ""
+            next_match = re.search(r'\bnext\s+action\s*[:=-]?\s*([^;|]+)', p.get("objective", ""), re.IGNORECASE)
+            if next_match:
+                p["next_action"] = next_match.group(1).strip(" ,.")
+                p["objective"] = re.sub(r'\bnext\s+action\s*[:=-]?\s*[^;|]+', "", p["objective"], flags=re.IGNORECASE).strip(" |,.-")
+
+        elif intent == "show_mission":
+            if "active mission" in low or "current mission" in low:
+                p["name"] = ""
+                p["active"] = True
+            else:
+                name = re.sub(r'^(?:show\s+mission|mission\s+details)\s*', "", original, flags=re.IGNORECASE).strip()
+                name = name.strip(" ,.-")
+                if not name:
+                    p["name"] = ""
+                    p["active"] = True
+                else:
+                    p["name"] = name
+
+        elif intent == "list_missions":
+            p["text"] = original
+
+        elif intent == "complete_mission":
+            name = re.sub(r'^(?:complete|finish|close)\s+mission\s+', "", original, flags=re.IGNORECASE).strip()
+            p["name"] = name.strip(" ,.-")
+
         elif intent == "show_project_memory":
             name = re.sub(
                 r'^(?:show\s+project|project\s+details\s+for|what\s+do\s+you\s+know\s+about\s+project)\s+',
@@ -489,6 +591,7 @@ class Brain:
             # Extract: to, subject, body from natural speech
             # "write email to rahul@gmail.com subject meeting body let's meet at 5"
             # "send mail to Mom saying I'll be late"
+            p["action"] = "send" if re.search(r'\bsend\s+(?:an?\s+)?(?:email|mail)\b', original, re.IGNORECASE) else "compose"
             to_match = re.search(
                 r'(?:to|for)\s+([\w._%+\-]+@[\w.\-]+\.[a-z]{2,}|[A-Za-z]+(?:\s+[A-Za-z]+)?)',
                 original, re.IGNORECASE
@@ -507,6 +610,29 @@ class Brain:
                 p["subject"] = subject_match.group(1).strip()
             if body_match:
                 p["body"] = body_match.group(1).strip()
+            if to_match and not p.get("body"):
+                remainder = original
+                remainder = re.sub(r'^(?:please\s+)?(?:send|write|compose|draft)\s+(?:an?\s+)?(?:email|mail)\s+', '', remainder, flags=re.IGNORECASE)
+                remainder = re.sub(
+                    r'^(?:to|for)\s+[\w._%+\-]+@[\w.\-]+\.[a-z]{2,}\s*',
+                    '',
+                    remainder,
+                    flags=re.IGNORECASE,
+                )
+                remainder = re.sub(
+                    r'^(?:to|for)\s+[A-Za-z]+(?:\s+[A-Za-z]+)?\s*',
+                    '',
+                    remainder,
+                    flags=re.IGNORECASE,
+                )
+                remainder = re.sub(
+                    r'\b(?:subject|about|regarding|re:?)\s+.+?(?:\s+(?:body|saying|that|message|content)|$)',
+                    '',
+                    remainder,
+                    flags=re.IGNORECASE,
+                ).strip(" ,:-")
+                if remainder:
+                    p["body"] = remainder
 
         elif intent == "remind":
             m = re.search(r'remind(?:\s+me)?\s+(?:to\s+)?(.+?)\s+at\s+(.+)', low)
@@ -531,7 +657,7 @@ class Brain:
                     break
 
         elif intent == "open_folder":
-            for folder in ["downloads", "desktop", "documents", "pictures", "music", "videos"]:
+            for folder in ["downloads", "desktop", "documents", "pictures", "music", "videos", "workspace"]:
                 if folder in low:
                     p["folder"] = folder
                     break
@@ -724,6 +850,81 @@ class Brain:
                         lines.append(line)
                     return "Tracked projects:\n" + "\n".join(lines)
                 return f"Project memory is not available, {USER_NAME}."
+            if intent == "save_workflow":
+                if memory:
+                    return memory.save_workflow(
+                        params.get("name", ""),
+                        params.get("steps", []),
+                        description=params.get("description", ""),
+                    )
+                return f"Workflow memory is not available, {USER_NAME}."
+            if intent == "run_workflow":
+                if memory:
+                    return self._run_saved_workflow(memory, params.get("name", ""))
+                return f"Workflow engine is not available, {USER_NAME}."
+            if intent == "list_workflows":
+                if memory:
+                    workflows = memory.list_workflows()
+                    if not workflows:
+                        return f"No workflows saved yet, {USER_NAME}."
+                    lines = []
+                    for item in workflows[:10]:
+                        line = f"- {item['name']}"
+                        if item["description"]:
+                            line += f": {item['description']}"
+                        if item["last_run"]:
+                            line += f" | Last run: {item['last_run']}"
+                        lines.append(line)
+                    return "Saved workflows:\n" + "\n".join(lines)
+                return f"Workflow memory is not available, {USER_NAME}."
+            if intent == "start_mission":
+                if memory:
+                    objective = params.get("objective", "")
+                    name = params.get("name", "")
+                    plan = self.planner._split_task(objective) if self.planner and objective else []
+                    return memory.save_mission(
+                        name,
+                        objective,
+                        next_action=params.get("next_action", ""),
+                        plan=plan,
+                        status="active",
+                    )
+                return f"Mission memory is not available, {USER_NAME}."
+            if intent == "show_mission":
+                if memory:
+                    mission = memory.get_active_mission() if params.get("active") else memory.get_mission(params.get("name", ""))
+                    if not mission:
+                        return f"I couldn't find that mission, {USER_NAME}."
+                    parts = [
+                        f"Mission: {mission['name']}",
+                        f"Objective: {mission['objective']}",
+                        f"Status: {mission['status']}",
+                    ]
+                    if mission.get("next_action"):
+                        parts.append(f"Next action: {mission['next_action']}")
+                    if mission.get("plan"):
+                        parts.append("Plan: " + " | ".join(mission["plan"][:6]))
+                    if mission.get("notes"):
+                        parts.append(f"Notes: {mission['notes']}")
+                    return "\n".join(parts)
+                return f"Mission memory is not available, {USER_NAME}."
+            if intent == "list_missions":
+                if memory:
+                    missions = memory.list_missions()
+                    if not missions:
+                        return f"No missions saved yet, {USER_NAME}."
+                    lines = []
+                    for item in missions[:10]:
+                        line = f"- {item['name']}: {item['objective']} | Status: {item['status']}"
+                        if item["next_action"]:
+                            line += f" | Next: {item['next_action']}"
+                        lines.append(line)
+                    return "Mission board:\n" + "\n".join(lines)
+                return f"Mission memory is not available, {USER_NAME}."
+            if intent == "complete_mission":
+                if memory:
+                    return memory.complete_mission(params.get("name", ""))
+                return f"Mission memory is not available, {USER_NAME}."
             if intent == "ingest_knowledge_file":
                 if not files or not memory:
                     return f"Knowledge ingestion is not available, {USER_NAME}."
@@ -752,10 +953,14 @@ class Brain:
                         f"- Profile entries: {stats['profile_entries']}\n"
                         f"- Projects: {stats['projects']}\n"
                         f"- Knowledge files: {stats['knowledge_docs']}\n"
+                        f"- Workflows: {stats['workflows']}\n"
+                        f"- Missions: {stats['missions']}\n"
                         f"- Contacts: {stats['contacts']}\n"
                         f"- Notes: {stats['notes']}\n"
                         f"- Facts: {stats['facts']}\n"
                         f"- Conversations stored: {stats['history']}\n"
+                        f"- Active mission: {stats['active_mission'] or 'none'}\n"
+                        f"- Operator mode: {'enabled' if OPERATOR_MODE else 'disabled'}\n"
                         f"- Memory DB: {stats['db_path']}\n"
                         f"- Knowledge folder: {KNOWLEDGE_DIR}"
                     )
@@ -764,6 +969,9 @@ class Brain:
                 to      = params.get("to", "")
                 subject = params.get("subject", "")
                 body    = params.get("body", "")
+                action  = params.get("action", "compose")
+                if action == "send" and hasattr(browser, "send_gmail"):
+                    return browser.send_gmail(to=to, subject=subject, body=body)
                 if hasattr(browser, "compose_gmail"):
                     return browser.compose_gmail(to=to, subject=subject, body=body)
                 # Fallback: open Gmail
@@ -920,6 +1128,31 @@ class Brain:
             return f"Error executing '{intent}', {USER_NAME}: {e}"
 
         return self.ai.chat(original)
+
+    def _run_saved_workflow(self, memory, name: str) -> str:
+        workflow = memory.get_workflow(name)
+        if not workflow:
+            return f"I couldn't find that workflow, {USER_NAME}."
+
+        previous_state = self._planner_active
+        self._planner_active = True
+        results = []
+        try:
+            for step in workflow["steps"]:
+                intent, params = self.detect_intent(step)
+                if intent:
+                    result = self.execute_intent(intent, params, step)
+                else:
+                    result = self.ai.chat(step)
+                results.append(result)
+            memory.mark_workflow_run(workflow["name"])
+        finally:
+            self._planner_active = previous_state
+
+        tail = " ".join(result for result in results[-2:] if result)
+        if tail:
+            return f"Workflow '{workflow['name']}' complete. {tail}"
+        return f"Workflow '{workflow['name']}' complete, {USER_NAME}."
 
     def _chat_with_memory(self, text: str) -> str:
         memory = self.tools.get("memory")

@@ -1,6 +1,7 @@
 """memory/manager.py - SQLite-backed memory, profile, projects, and knowledge."""
 
 import datetime
+import json
 import sqlite3
 import threading
 from pathlib import Path
@@ -144,6 +145,27 @@ class MemoryManager:
                 created TEXT NOT NULL,
                 updated TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS workflows (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                description TEXT NOT NULL DEFAULT '',
+                steps_json TEXT NOT NULL,
+                tags TEXT NOT NULL DEFAULT '',
+                created TEXT NOT NULL,
+                updated TEXT NOT NULL,
+                last_run TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS missions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                objective TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                next_action TEXT NOT NULL DEFAULT '',
+                notes TEXT NOT NULL DEFAULT '',
+                plan_json TEXT NOT NULL DEFAULT '[]',
+                created TEXT NOT NULL,
+                updated TEXT NOT NULL
+            );
             """
         )
         self.conn.commit()
@@ -225,6 +247,8 @@ class MemoryManager:
             self.conn.execute("DELETE FROM profile_entries")
             self.conn.execute("DELETE FROM projects")
             self.conn.execute("DELETE FROM knowledge_docs")
+            self.conn.execute("DELETE FROM workflows")
+            self.conn.execute("DELETE FROM missions")
             self.conn.execute("DELETE FROM contacts")
             self.conn.commit()
         return f"Advanced memory cleared, {USER_NAME}."
@@ -523,6 +547,252 @@ class MemoryManager:
             self.conn.commit()
         return f"Knowledge saved from {clean_title}."
 
+    def sync_knowledge_files(self, files_controller, knowledge_dir: Path, max_chars: int = 12000) -> dict:
+        if not files_controller or not knowledge_dir.exists():
+            return {"scanned": 0, "saved": 0}
+
+        allowed = {".txt", ".md", ".py", ".json", ".csv", ".pdf", ".docx", ".doc"}
+        scanned = 0
+        saved = 0
+
+        for path in knowledge_dir.rglob("*"):
+            if not path.is_file() or path.suffix.lower() not in allowed:
+                continue
+            scanned += 1
+            resolved, content = files_controller.extract_text(str(path), max_chars=max_chars)
+            if not resolved or not content or content.startswith("Couldn't read file:"):
+                continue
+            self.save_knowledge_document(resolved.stem, str(resolved), content)
+            saved += 1
+
+        return {"scanned": scanned, "saved": saved}
+
+    def save_workflow(self, name: str, steps: list[str], description: str = "", tags: str = "") -> str:
+        clean_name = self._normalize_text(name)
+        normalized_steps = [self._normalize_text(step) for step in steps if self._normalize_text(step)]
+        if not clean_name or not normalized_steps:
+            return f"Workflow name or steps are missing, {USER_NAME}."
+        now = datetime.datetime.now().isoformat()
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT INTO workflows (name, description, steps_json, tags, created, updated, last_run)
+                VALUES (?, ?, ?, ?, ?, ?, '')
+                ON CONFLICT(name) DO UPDATE SET
+                    description=excluded.description,
+                    steps_json=excluded.steps_json,
+                    tags=CASE WHEN excluded.tags != '' THEN excluded.tags ELSE workflows.tags END,
+                    updated=excluded.updated
+                """,
+                (
+                    clean_name,
+                    self._normalize_text(description),
+                    json.dumps(normalized_steps),
+                    self._normalize_text(tags),
+                    now,
+                    now,
+                ),
+            )
+            self.conn.commit()
+        return f"Workflow saved: {clean_name}."
+
+    def get_workflow(self, name: str) -> dict | None:
+        clean_name = self._normalize_text(name)
+        if not clean_name:
+            return None
+        with self._lock:
+            row = self.conn.execute(
+                """
+                SELECT name, description, steps_json, tags, updated, last_run
+                FROM workflows
+                WHERE lower(name)=lower(?)
+                """,
+                (clean_name,),
+            ).fetchone()
+            if not row:
+                rows = self.conn.execute(
+                    "SELECT name, description, steps_json, tags, updated, last_run FROM workflows ORDER BY updated DESC"
+                ).fetchall()
+            else:
+                rows = [row]
+        match = None
+        for candidate in rows:
+            workflow_name = candidate[0].lower()
+            target = clean_name.lower()
+            if target == workflow_name or target in workflow_name or workflow_name in target:
+                match = candidate
+                break
+        if not match:
+            return None
+        steps = json.loads(match[2]) if match[2] else []
+        return {
+            "name": match[0],
+            "description": match[1],
+            "steps": steps,
+            "tags": match[3],
+            "updated": match[4],
+            "last_run": match[5],
+        }
+
+    def list_workflows(self) -> list:
+        with self._lock:
+            rows = self.conn.execute(
+                """
+                SELECT name, description, tags, updated, last_run
+                FROM workflows
+                ORDER BY updated DESC
+                """
+            ).fetchall()
+        return [
+            {
+                "name": row[0],
+                "description": row[1],
+                "tags": row[2],
+                "updated": row[3],
+                "last_run": row[4],
+            }
+            for row in rows
+        ]
+
+    def mark_workflow_run(self, name: str):
+        clean_name = self._normalize_text(name)
+        if not clean_name:
+            return
+        now = datetime.datetime.now().isoformat()
+        with self._lock:
+            self.conn.execute(
+                "UPDATE workflows SET last_run=?, updated=? WHERE lower(name)=lower(?)",
+                (now, now, clean_name),
+            )
+            self.conn.commit()
+
+    def save_mission(
+        self,
+        name: str,
+        objective: str,
+        next_action: str = "",
+        notes: str = "",
+        plan: list[str] | None = None,
+        status: str = "active",
+    ) -> str:
+        clean_name = self._normalize_text(name)
+        clean_objective = self._normalize_text(objective)
+        if not clean_name or not clean_objective:
+            return f"Mission name or objective is missing, {USER_NAME}."
+        now = datetime.datetime.now().isoformat()
+        plan_json = json.dumps([self._normalize_text(step) for step in (plan or []) if self._normalize_text(step)])
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT INTO missions (name, objective, status, next_action, notes, plan_json, created, updated)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(name) DO UPDATE SET
+                    objective=excluded.objective,
+                    status=excluded.status,
+                    next_action=CASE WHEN excluded.next_action != '' THEN excluded.next_action ELSE missions.next_action END,
+                    notes=CASE WHEN excluded.notes != '' THEN excluded.notes ELSE missions.notes END,
+                    plan_json=CASE WHEN excluded.plan_json != '[]' THEN excluded.plan_json ELSE missions.plan_json END,
+                    updated=excluded.updated
+                """,
+                (clean_name, clean_objective, status, self._normalize_text(next_action), self._normalize_text(notes), plan_json, now, now),
+            )
+            self.conn.commit()
+        return f"Mission saved: {clean_name}."
+
+    def get_mission(self, name: str) -> dict | None:
+        clean_name = self._normalize_text(name)
+        if not clean_name:
+            return None
+        with self._lock:
+            row = self.conn.execute(
+                """
+                SELECT name, objective, status, next_action, notes, plan_json, updated
+                FROM missions
+                WHERE lower(name)=lower(?)
+                """,
+                (clean_name,),
+            ).fetchone()
+            if not row:
+                rows = self.conn.execute(
+                    "SELECT name, objective, status, next_action, notes, plan_json, updated FROM missions ORDER BY updated DESC"
+                ).fetchall()
+            else:
+                rows = [row]
+        match = None
+        for candidate in rows:
+            mission_name = candidate[0].lower()
+            target = clean_name.lower()
+            if target == mission_name or target in mission_name or mission_name in target:
+                match = candidate
+                break
+        if not match:
+            return None
+        return {
+            "name": match[0],
+            "objective": match[1],
+            "status": match[2],
+            "next_action": match[3],
+            "notes": match[4],
+            "plan": json.loads(match[5]) if match[5] else [],
+            "updated": match[6],
+        }
+
+    def get_active_mission(self) -> dict | None:
+        with self._lock:
+            row = self.conn.execute(
+                """
+                SELECT name, objective, status, next_action, notes, plan_json, updated
+                FROM missions
+                WHERE lower(status)='active'
+                ORDER BY updated DESC
+                LIMIT 1
+                """
+            ).fetchone()
+        if not row:
+            return None
+        return {
+            "name": row[0],
+            "objective": row[1],
+            "status": row[2],
+            "next_action": row[3],
+            "notes": row[4],
+            "plan": json.loads(row[5]) if row[5] else [],
+            "updated": row[6],
+        }
+
+    def list_missions(self) -> list:
+        with self._lock:
+            rows = self.conn.execute(
+                """
+                SELECT name, objective, status, next_action, updated
+                FROM missions
+                ORDER BY updated DESC
+                """
+            ).fetchall()
+        return [
+            {
+                "name": row[0],
+                "objective": row[1],
+                "status": row[2],
+                "next_action": row[3],
+                "updated": row[4],
+            }
+            for row in rows
+        ]
+
+    def complete_mission(self, name: str) -> str:
+        clean_name = self._normalize_text(name)
+        if not clean_name:
+            return f"Which mission should I complete, {USER_NAME}?"
+        now = datetime.datetime.now().isoformat()
+        with self._lock:
+            self.conn.execute(
+                "UPDATE missions SET status='completed', updated=? WHERE lower(name)=lower(?)",
+                (now, clean_name),
+            )
+            self.conn.commit()
+        return f"Mission completed: {clean_name}."
+
     def list_knowledge_documents(self) -> list:
         with self._lock:
             rows = self.conn.execute(
@@ -551,6 +821,12 @@ class MemoryManager:
             ).fetchall()
             doc_rows = self.conn.execute(
                 "SELECT title, source_path, summary, content, updated FROM knowledge_docs ORDER BY updated DESC"
+            ).fetchall()
+            workflow_rows = self.conn.execute(
+                "SELECT name, description, steps_json, tags, updated, last_run FROM workflows ORDER BY updated DESC"
+            ).fetchall()
+            mission_rows = self.conn.execute(
+                "SELECT name, objective, status, next_action, notes, plan_json, updated FROM missions ORDER BY updated DESC"
             ).fetchall()
             contact_rows = self.conn.execute(
                 "SELECT name, phone, channel, created FROM contacts ORDER BY created DESC"
@@ -617,6 +893,38 @@ class MemoryManager:
                     "score": score,
                 })
 
+        for name, description, steps_json, tags, updated, last_run in workflow_rows:
+            steps = " ".join(json.loads(steps_json) if steps_json else [])
+            score = self._score_text(query, f"{name} {description} {steps} {tags}", bonus=2)
+            if score:
+                content = description or self._summarize_text(steps, limit=220)
+                if steps:
+                    content += f" | Steps: {self._summarize_text(steps, limit=140)}"
+                scored.append({
+                    "kind": "workflow",
+                    "title": name,
+                    "content": content,
+                    "created": updated or last_run,
+                    "score": score,
+                })
+
+        for name, objective, status, next_action, notes, plan_json, updated in mission_rows:
+            plan_text = " ".join(json.loads(plan_json) if plan_json else [])
+            score = self._score_text(query, f"{name} {objective} {status} {next_action} {notes} {plan_text}", bonus=3)
+            if score:
+                content_parts = [objective, f"Status: {status}"]
+                if next_action:
+                    content_parts.append(f"Next: {next_action}")
+                if notes:
+                    content_parts.append(f"Notes: {self._summarize_text(notes, limit=120)}")
+                scored.append({
+                    "kind": "mission",
+                    "title": name,
+                    "content": " | ".join(part for part in content_parts if part),
+                    "created": updated,
+                    "score": score,
+                })
+
         for name, phone, channel, created in contact_rows:
             score = self._score_text(query, f"{name} {phone} {channel}", bonus=1)
             if score:
@@ -634,6 +942,18 @@ class MemoryManager:
     def build_context(self, query: str, max_items: int = 6) -> str:
         sections = []
 
+        active_mission = self.get_active_mission()
+        if active_mission:
+            lines = [
+                f"- Mission: {active_mission['name']}",
+                f"- Objective: {active_mission['objective']}",
+            ]
+            if active_mission["next_action"]:
+                lines.append(f"- Next action: {active_mission['next_action']}")
+            if active_mission["plan"]:
+                lines.append("- Plan: " + " | ".join(active_mission["plan"][:5]))
+            sections.append("Active mission:\n" + "\n".join(lines))
+
         profile_entries = self.get_profile_entries(limit=6)
         if profile_entries:
             lines = "\n".join(f"- {item['value']}" for item in profile_entries)
@@ -650,6 +970,18 @@ class MemoryManager:
                     base += f" | Next: {item['next_steps']}"
                 lines.append(base)
             sections.append("Tracked projects:\n" + "\n".join(lines))
+
+        workflow_rows = self.list_workflows()[:4]
+        if workflow_rows:
+            lines = []
+            for item in workflow_rows:
+                base = f"- {item['name']}"
+                if item["description"]:
+                    base += f": {item['description']}"
+                if item["last_run"]:
+                    base += f" | Last run: {item['last_run']}"
+                lines.append(base)
+            sections.append("Saved workflows:\n" + "\n".join(lines))
 
         relevant = self.search_knowledge(query, limit=max_items)
         if relevant:
@@ -670,8 +1002,12 @@ class MemoryManager:
                 "profile_entries": self.conn.execute("SELECT COUNT(*) FROM profile_entries").fetchone()[0],
                 "projects": self.conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0],
                 "knowledge_docs": self.conn.execute("SELECT COUNT(*) FROM knowledge_docs").fetchone()[0],
+                "workflows": self.conn.execute("SELECT COUNT(*) FROM workflows").fetchone()[0],
+                "missions": self.conn.execute("SELECT COUNT(*) FROM missions").fetchone()[0],
                 "contacts": self.conn.execute("SELECT COUNT(*) FROM contacts").fetchone()[0],
                 "history": self.conn.execute("SELECT COUNT(*) FROM history").fetchone()[0],
             }
         counts["db_path"] = str(self.db_path)
+        active = self.get_active_mission()
+        counts["active_mission"] = active["name"] if active else ""
         return counts
