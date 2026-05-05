@@ -16,6 +16,7 @@ from config.settings import (
     JARVIS_NAME,
     USER_NAME,
     OPERATOR_MODE,
+    VOICE_RESPONSE_MAX_TOKENS,
 )
 from config.logger import get_logger
 
@@ -74,6 +75,8 @@ EXECUTION RULES:
 - Never claim you are only a language model or that you cannot access the laptop when a local tool or browser automation path exists.
 - If a task depends on a prerequisite like a signed-in Gmail session, browser window, or installed package, say that exact prerequisite clearly.
 - Prefer taking the local action first when the request maps to browser, desktop, memory, or terminal capabilities.
+- If no tool was actually run, never say you opened, launched, sent, prepared, or played something.
+- For emotional support or casual conversation, respond honestly and helpfully instead of inventing background actions.
 - Operator mode is currently {"enabled" if OPERATOR_MODE else "disabled"} on this local install.
 
 RESPONSE FORMAT:
@@ -208,11 +211,25 @@ class AIClient:
             "xai": XAI_MODEL,
         }.get(provider, "")
 
-    def chat(self, user_message: str, context: str = "") -> str:
+    def chat(self, user_message: str, context: str = "", voice_mode: bool = False) -> str:
         if self.provider == "none" or self.client is None:
             return self._offline_reply(user_message)
 
-        full_msg = f"{context}\n\n{user_message}" if context else user_message
+        voice_hint = ""
+        if voice_mode:
+            voice_hint = (
+                "Voice mode is active. "
+                "Reply fast, naturally, and briefly. "
+                "For simple actions or confirmations, use one short sentence."
+            )
+
+        composed_context = context
+        if voice_hint:
+            composed_context = f"{composed_context}\n\n{voice_hint}".strip() if composed_context else voice_hint
+
+        full_msg = f"{composed_context}\n\n{user_message}" if composed_context else user_message
+        history_limit = 12 if voice_mode else 24
+        max_tokens = VOICE_RESPONSE_MAX_TOKENS if voice_mode else 600
         last_error = None
 
         for _ in range(max(1, len(self.providers))):
@@ -223,7 +240,7 @@ class AIClient:
                     system_turn = {"role": "model", "parts": [{"text": SYSTEM_PROMPT}]}
                     contents = [system_turn] + [
                         {"role": h["role"], "parts": [{"text": h["parts"][0]["text"]}]}
-                        for h in self.history[-24:]
+                        for h in self.history[-history_limit:]
                     ]
                     gemini_error = None
                     for model_name in self._gemini_models():
@@ -248,13 +265,13 @@ class AIClient:
                     self.history.append({"role": "user", "content": full_msg})
                     messages = [{"role": "system", "content": SYSTEM_PROMPT}] + [
                         {"role": h["role"], "content": h["content"]}
-                        for h in self.history[-24:]
+                        for h in self.history[-history_limit:]
                         if "content" in h
                     ]
                     resp = self.client.chat.completions.create(
                         model=self._provider_model_name(current_provider),
                         messages=messages,
-                        max_tokens=600,
+                        max_tokens=max_tokens,
                     )
                     reply = resp.choices[0].message.content or ""
                     self.history.append({"role": "assistant", "content": reply})

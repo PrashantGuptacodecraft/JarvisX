@@ -19,6 +19,7 @@ from config.settings import (
     VOICE_PAUSE_THRESHOLD,
     VOICE_PHRASE_TIME_LIMIT,
     VOICE_RETRY_SECONDS,
+    VOICE_SILENCE_SECONDS,
     VOICE_WAKE_TIMEOUT,
     VOICE_WAKE_WORDS,
 )
@@ -94,6 +95,8 @@ class Listener:
             self.recognizer.energy_threshold = VOICE_ENERGY_THRESHOLD
             self.recognizer.dynamic_energy_threshold = VOICE_DYNAMIC_ENERGY
             self.recognizer.pause_threshold = VOICE_PAUSE_THRESHOLD
+            self.recognizer.non_speaking_duration = max(0.18, min(0.45, VOICE_PAUSE_THRESHOLD / 2))
+            self.recognizer.phrase_threshold = 0.18
             self.mic = sr.Microphone()
             with self.mic as src:
                 self.recognizer.adjust_for_ambient_noise(
@@ -128,6 +131,8 @@ class Listener:
             self.recognizer.energy_threshold = VOICE_ENERGY_THRESHOLD
             self.recognizer.dynamic_energy_threshold = False
             self.recognizer.pause_threshold = VOICE_PAUSE_THRESHOLD
+            self.recognizer.non_speaking_duration = max(0.18, min(0.45, VOICE_PAUSE_THRESHOLD / 2))
+            self.recognizer.phrase_threshold = 0.18
 
             sd.query_devices(kind="input")
 
@@ -174,12 +179,15 @@ class Listener:
         self._conversation_timer.daemon = True
         self._conversation_timer.start()
 
-    def wake(self, with_callback: bool = True):
+    def wake(self, with_callback: bool = True, acknowledge: bool = True):
         self._cancel_conversation_timer()
         self.active_mode = True
         self._status("listening")
         if with_callback and self.wakeword_callback:
-            self.wakeword_callback()
+            try:
+                self.wakeword_callback(acknowledge=acknowledge)
+            except TypeError:
+                self.wakeword_callback()
 
     def sleep(self):
         self._cancel_conversation_timer()
@@ -257,17 +265,69 @@ class Listener:
             import speech_recognition as sr
 
             sample_rate = 16000
-            duration = max(1, phrase_limit if phrase_limit else timeout)
-            frames = int(duration * sample_rate)
+            block_seconds = 0.12
+            block_frames = int(sample_rate * block_seconds)
+            max_duration = max(1.0, float(phrase_limit if phrase_limit else timeout))
+            start_timeout = max(0.8, float(timeout))
+            silence_limit = max(0.28, float(VOICE_SILENCE_SECONDS))
+            max_frames = int(max_duration * sample_rate)
+            silence_frames = int(silence_limit * sample_rate)
+            threshold = self._sounddevice_threshold()
 
-            recording = sd.rec(
-                frames,
+            chunks = []
+            pre_roll = []
+            pre_roll_limit = max(1, int(0.24 / block_seconds))
+            heard_voice = False
+            silent_run = 0
+            total_frames = 0
+            deadline = time.time() + start_timeout
+            capture_started_at = None
+
+            with sd.InputStream(
                 samplerate=sample_rate,
                 channels=1,
                 dtype="int16",
-            )
-            sd.wait()
-            samples = recording.reshape(-1)
+                blocksize=block_frames,
+            ) as stream:
+                while self.running:
+                    if not heard_voice and time.time() >= deadline:
+                        return ""
+                    if heard_voice and capture_started_at and (time.time() - capture_started_at) >= max_duration:
+                        break
+
+                    block, _ = stream.read(block_frames)
+                    samples = block.reshape(-1).copy()
+
+                    if not heard_voice:
+                        pre_roll.append(samples)
+                        if len(pre_roll) > pre_roll_limit:
+                            pre_roll.pop(0)
+                        if not self._chunk_has_voice(samples, threshold):
+                            continue
+                        heard_voice = True
+                        capture_started_at = time.time()
+                        chunks.extend(pre_roll)
+                        total_frames = sum(len(chunk) for chunk in chunks)
+                        silent_run = 0
+                        continue
+
+                    chunks.append(samples)
+                    total_frames += len(samples)
+
+                    if self._chunk_has_voice(samples, threshold):
+                        silent_run = 0
+                    else:
+                        silent_run += len(samples)
+                        if silent_run >= silence_frames:
+                            break
+
+                    if total_frames >= max_frames:
+                        break
+
+            if not chunks:
+                return ""
+
+            samples = np.concatenate(chunks).astype("int16")
             trimmed = self._trim_sounddevice_audio(samples)
             if trimmed is None or len(trimmed) == 0:
                 return ""
@@ -285,6 +345,20 @@ class Listener:
             self.last_error = str(exc)
             self._next_retry_at = time.time() + VOICE_RETRY_SECONDS
             return ""
+
+    def _sounddevice_threshold(self) -> int:
+        recognizer_threshold = int(getattr(self.recognizer, "energy_threshold", VOICE_ENERGY_THRESHOLD) or VOICE_ENERGY_THRESHOLD)
+        return max(180, int(recognizer_threshold * 0.72))
+
+    @staticmethod
+    def _chunk_has_voice(samples, threshold: int) -> bool:
+        if samples is None or len(samples) == 0:
+            return False
+        normalized = samples.astype("int32")
+        peak = int(normalized.max())
+        trough = int(normalized.min())
+        amplitude = max(abs(peak), abs(trough))
+        return amplitude >= threshold
 
     def _trim_sounddevice_audio(self, samples):
         import numpy as np
@@ -370,10 +444,10 @@ class Listener:
             if not voice_open:
                 if not self._contains_wake_word(text):
                     continue
-                self.wake(with_callback=True)
                 remainder = self._strip_wake_word(text)
+                self.wake(with_callback=True, acknowledge=not bool(remainder))
                 if remainder:
-                    self.command_queue.put(remainder)
+                    self.command_queue.put(f"__VOICE__:{remainder}")
                     self._status("thinking")
                 self.keep_active()
                 continue
@@ -384,7 +458,7 @@ class Listener:
                 continue
 
             self._cancel_conversation_timer()
-            self.command_queue.put(cleaned)
+            self.command_queue.put(f"__VOICE__:{cleaned}")
             self._status("thinking")
 
     def inject_text(self, text: str):

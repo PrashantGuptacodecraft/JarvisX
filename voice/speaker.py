@@ -206,6 +206,16 @@ class Speaker:
     def is_speaking(self) -> bool:
         return self._speaking
 
+    def acknowledge(self) -> bool:
+        try:
+            import winsound
+
+            winsound.Beep(980, 70)
+            winsound.Beep(1320, 55)
+            return True
+        except Exception:
+            return False
+
     def _speak(self, text: str):
         with self._lock:
             self._speaking = True

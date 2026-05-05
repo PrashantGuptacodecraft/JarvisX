@@ -4,10 +4,17 @@ Intent detection → action router.
 Routes 40+ command types including terminal, web, and code execution.
 """
 import json
+import random
 import re
 from difflib import get_close_matches
 from config.logger import get_logger
-from config.settings import KNOWLEDGE_DIR, OPERATOR_MODE, USER_NAME
+from config.settings import (
+    KNOWLEDGE_DIR,
+    OPERATOR_MODE,
+    USER_NAME,
+    VOICE_HISTORY_ITEMS,
+    VOICE_MEMORY_CONTEXT_ITEMS,
+)
 
 log = get_logger("brain")
 
@@ -97,6 +104,8 @@ INTENTS = {
     # Clipboard
     "read_clipboard": ["read clipboard", "what's in clipboard", "clipboard content"],
     "copy_to_clipboard": ["copy to clipboard", "copy this"],
+    "tell_joke": ["tell me a joke", "some jokes", "make me laugh"],
+    "comfort_support": ["not feeling good", "feeling low", "i am sad", "i'm sad"],
 }
 
 PLAN_ONLY_INTENTS = {
@@ -141,6 +150,8 @@ class Brain:
         self._gui_terminal_log = None   # Callback to write to GUI terminal
         self._planner_active = False
         self._last_whatsapp_contact = ""
+        self._pending_whatsapp_contact = ""
+        self._pending_whatsapp_message = ""
 
     def set_terminal_log(self, callback):
         """Allow GUI terminal tab to receive command outputs."""
@@ -157,11 +168,11 @@ class Brain:
         text = (text or "").strip()
         return self._detect_intent(text.lower(), text)
 
-    def execute_intent(self, intent: str, params: dict, original: str) -> str:
-        return self._execute(intent, params or {}, original)
+    def execute_intent(self, intent: str, params: dict, original: str, voice_mode: bool = False) -> str:
+        return self._execute(intent, params or {}, original, voice_mode=voice_mode)
 
     # ─────────────────────────────────────────
-    def process(self, text: str) -> str:
+    def process(self, text: str, voice_mode: bool = False) -> str:
         """Main entry: detect intent and route to correct handler."""
         text = text.strip()
         text_lower = text.lower()
@@ -170,19 +181,35 @@ class Brain:
         if self.pending:
             return self._handle_confirmation(text_lower)
 
+        follow_up = self._handle_pending_whatsapp_follow_up(text, voice_mode=voice_mode)
+        if follow_up is not None:
+            return follow_up
+
+        contact_only = self._resolve_whatsapp_contact_name(text)
+        if contact_only and len(text_lower.split()) <= 4 and not any(token in text_lower for token in ("open", "call", "play", "search", "send", "message", "text", "whatsapp")):
+            self._pending_whatsapp_contact = contact_only
+            self._pending_whatsapp_message = ""
+            return f"What message should I send to {contact_only}, {USER_NAME}?"
+
         # Prefer direct WhatsApp message execution over planner/app-open heuristics.
         if self._looks_like_whatsapp_message(text_lower):
             params = self._extract_params("whatsapp_msg", text_lower, text)
             if params.get("contact") and params.get("message"):
                 log.info(f"Intent: 'whatsapp_msg'  Params: {params}")
-                return self._execute("whatsapp_msg", params, text)
+                return self._execute("whatsapp_msg", params, text, voice_mode=voice_mode)
 
         if self._looks_like_whatsapp_call(text_lower):
             intent = "whatsapp_video_call" if "video call" in text_lower or "videochat" in text_lower or "video chat" in text_lower else "whatsapp_call"
             params = self._extract_params(intent, text_lower, text)
             if params.get("contact"):
                 log.info(f"Intent: {intent!r}  Params: {params}")
-                return self._execute(intent, params, text)
+                return self._execute(intent, params, text, voice_mode=voice_mode)
+
+        if self._looks_like_joke_request(text_lower):
+            return self._execute("tell_joke", {"raw": text}, text, voice_mode=voice_mode)
+
+        if self._looks_like_comfort_request(text_lower):
+            return self._execute("comfort_support", {"raw": text}, text, voice_mode=voice_mode)
 
         # Check for complex multi-step task
         if self.planner and not self._planner_active and self.planner.is_complex_task(text):
@@ -197,9 +224,9 @@ class Brain:
             return self._ask_confirmation(intent, params)
 
         if intent:
-            return self.execute_intent(intent, params, text)
+            return self.execute_intent(intent, params, text, voice_mode=voice_mode)
 
-        return self._chat_with_memory(text)
+        return self._chat_with_memory(text, voice_mode=voice_mode)
 
     # ─────────────────────────────────────────
     def _detect_intent(self, low: str, original: str):
@@ -262,6 +289,32 @@ class Brain:
         # Exclude email compose from being caught as WhatsApp
         is_email = any(w in low for w in ["email", "mail", "gmail"])
         return has_msg_signal and has_contact_signal and not is_email
+
+    def _looks_like_joke_request(self, low: str) -> bool:
+        return bool(
+            "joke" in low
+            or "jokes" in low
+            or "make me laugh" in low
+            or "something funny" in low
+        )
+
+    def _looks_like_comfort_request(self, low: str) -> bool:
+        phrases = [
+            "not feeling good",
+            "don't feeling good",
+            "dont feeling good",
+            "don't feel good",
+            "dont feel good",
+            "feeling low",
+            "feeling sad",
+            "i am sad",
+            "i'm sad",
+            "i am stressed",
+            "i'm stressed",
+            "i am anxious",
+            "i'm anxious",
+        ]
+        return any(phrase in low for phrase in phrases)
 
     def _looks_like_whatsapp_call(self, low: str) -> bool:
         if "call" not in low:
@@ -360,6 +413,132 @@ class Brain:
             return False
         return any(folder in low for folder in ["downloads", "desktop", "documents", "pictures", "music", "videos", "workspace", "folder"])
 
+    def _handle_pending_whatsapp_follow_up(self, text: str, voice_mode: bool = False):
+        low = (text or "").lower().strip()
+        if not low:
+            return None
+
+        if low in {"cancel", "never mind", "forget it", "abort"}:
+            if self._pending_whatsapp_contact or self._pending_whatsapp_message:
+                self._clear_pending_whatsapp()
+                return f"Cancelled, {USER_NAME}."
+            return None
+
+        if self._pending_whatsapp_contact:
+            intent, _ = self.detect_intent(text)
+            if intent and intent != "whatsapp_msg":
+                self._clear_pending_whatsapp()
+                return None
+            if intent == "whatsapp_msg":
+                fresh_params = self._extract_params("whatsapp_msg", low, text)
+                if fresh_params.get("contact") and fresh_params.get("contact").lower() != self._pending_whatsapp_contact.lower():
+                    self._clear_pending_whatsapp()
+                    return None
+            message = self._normalize_pending_message(text)
+            if not message:
+                return f"What should I send to {self._pending_whatsapp_contact}, {USER_NAME}?"
+            contact = self._pending_whatsapp_contact
+            self._clear_pending_whatsapp()
+            return self._execute(
+                "whatsapp_msg",
+                {"contact": contact, "message": message, "raw": text},
+                text,
+                voice_mode=voice_mode,
+            )
+
+        if self._pending_whatsapp_message:
+            intent, fresh_params = self.detect_intent(text)
+            if intent == "whatsapp_msg" and fresh_params.get("contact") and fresh_params.get("message"):
+                self._clear_pending_whatsapp()
+                return None
+            contact = self._resolve_whatsapp_contact_name(text)
+            if contact:
+                message = self._pending_whatsapp_message
+                self._clear_pending_whatsapp()
+                return self._execute(
+                    "whatsapp_msg",
+                    {"contact": contact, "message": message, "raw": text},
+                    text,
+                    voice_mode=voice_mode,
+                )
+            if intent and intent != "whatsapp_msg":
+                self._clear_pending_whatsapp()
+                return None
+            return f"Who should I send that message to, {USER_NAME}?"
+
+        return None
+
+    def _normalize_pending_message(self, text: str) -> str:
+        cleaned = (text or "").strip()
+        for prefix in ("message ", "send ", "text ", "whatsapp ", "msg "):
+            if cleaned.lower().startswith(prefix):
+                cleaned = cleaned[len(prefix):].strip()
+                break
+        return cleaned.strip(" :,-")
+
+    def _clear_pending_whatsapp(self):
+        self._pending_whatsapp_contact = ""
+        self._pending_whatsapp_message = ""
+
+    def _known_whatsapp_contacts(self) -> list[str]:
+        names = []
+        memory = self.tools.get("memory")
+        if memory:
+            try:
+                names.extend(item["name"] for item in memory.list_contacts(channel="whatsapp"))
+            except Exception:
+                pass
+        if self._last_whatsapp_contact:
+            names.append(self._last_whatsapp_contact.lower())
+        deduped = []
+        for name in names:
+            clean = (name or "").strip().lower()
+            if clean and clean not in deduped:
+                deduped.append(clean)
+        return deduped
+
+    def _resolve_whatsapp_contact_name(self, text: str) -> str:
+        candidate = (text or "").strip().lower()
+        if not candidate:
+            return ""
+        contacts = self._known_whatsapp_contacts()
+        if not contacts:
+            return ""
+        for saved in contacts:
+            if candidate == saved:
+                return saved.title()
+        partial = ""
+        if len(candidate) >= 4:
+            partial = next((saved for saved in contacts if candidate in saved or saved in candidate), "")
+        if partial:
+            return partial.title()
+        match = get_close_matches(candidate, contacts, n=1, cutoff=0.72)
+        if match:
+            return match[0].title()
+        return ""
+
+    def _split_known_contact_message(self, body: str) -> tuple[str, str]:
+        clean_body = (body or "").strip()
+        if not clean_body:
+            return "", ""
+        lower_body = clean_body.lower()
+        contacts = sorted(self._known_whatsapp_contacts(), key=len, reverse=True)
+
+        for saved in contacts:
+            if lower_body == saved:
+                return saved.title(), ""
+            if lower_body.startswith(saved + " "):
+                return saved.title(), clean_body[len(saved):].strip()
+
+        tokens = clean_body.split()
+        for size in range(min(4, len(tokens)), 0, -1):
+            suffix = " ".join(tokens[-size:])
+            resolved = self._resolve_whatsapp_contact_name(suffix)
+            if resolved and len(tokens) > size:
+                return resolved, " ".join(tokens[:-size]).strip()
+
+        return "", ""
+
     def _clean_contact_name(self, value: str) -> str:
         contact = (value or "").strip()
         contact = re.sub(r'\b(?:on whatsapp|in whatsapp|using whatsapp|on wa|on whats app)\b', "", contact, flags=re.IGNORECASE)
@@ -442,6 +621,17 @@ class Brain:
                         p["contact"] = self._clean_contact_name(first)
                         p["message"] = second
                     break
+            if not p.get("contact"):
+                body = re.sub(
+                    r'^(?:please\s+)?(?:send\s+)?(?:whatsapp\s+)?(?:message|measage|text|msg)\s+',
+                    "",
+                    original,
+                    flags=re.IGNORECASE,
+                ).strip()
+                contact_guess, message_guess = self._split_known_contact_message(body)
+                if contact_guess:
+                    p["contact"] = contact_guess
+                    p["message"] = message_guess
             if not p.get("contact") or not p.get("message"):
                 tokens = re.split(r'\b(?:message|measage|text|msg|whatsapp|send)\b', original, flags=re.IGNORECASE)
                 cleaned = " ".join(t.strip() for t in tokens if t.strip()).strip()
@@ -449,6 +639,14 @@ class Brain:
                     message, contact = re.split(r'\bto\b', cleaned, maxsplit=1, flags=re.IGNORECASE)
                     p["message"] = message.strip()
                     p["contact"] = self._clean_contact_name(contact)
+                elif cleaned and not p.get("message"):
+                    resolved_contact = self._resolve_whatsapp_contact_name(cleaned)
+                    if resolved_contact:
+                        p["contact"] = resolved_contact
+                    else:
+                        p["message"] = cleaned
+            if not p.get("contact"):
+                p["contact"] = self._resolve_whatsapp_contact_name(original)
 
         elif intent in ("whatsapp_call", "whatsapp_video_call"):
             stripped = re.sub(r'^(?:please\s+)?(?:whatsapp\s+)?(?:video call|voice call|audio call|call)\s+', "", original, flags=re.IGNORECASE).strip()
@@ -720,7 +918,7 @@ class Brain:
         return p
 
     # ─────────────────────────────────────────
-    def _execute(self, intent: str, params: dict, original: str) -> str:
+    def _execute(self, intent: str, params: dict, original: str, voice_mode: bool = False) -> str:
         t = self.tools
         apps     = t.get("apps")
         browser  = t.get("browser")
@@ -1027,7 +1225,7 @@ class Brain:
             if intent == "write_code":
                 if terminal:
                     return terminal.write_and_run(params.get("content", original), self.ai)
-                return self.ai.chat(original)
+                return self.ai.chat(original, voice_mode=voice_mode)
 
             # ── Web ────────────────────────────────────
             if intent == "fetch_url":
@@ -1052,15 +1250,53 @@ class Brain:
             if intent == "summarize_web":
                 if web:
                     return web.summarize_with_ai(params.get("content", original), self.ai)
-                return self.ai.chat(original)
+                return self.ai.chat(original, voice_mode=voice_mode)
+
+            if intent == "tell_joke":
+                jokes = [
+                    "Why do programmers prefer dark mode? Because light attracts bugs.",
+                    "I told my laptop to take a break. It said it needed one byte.",
+                    "Why did the browser go to therapy? Too many tabs open.",
+                    "I would tell you a UDP joke, but you might not get it.",
+                    "Why was the computer cold? It left its Windows open.",
+                ]
+                if voice_mode:
+                    return random.choice(jokes)
+                picks = random.sample(jokes, k=min(3, len(jokes)))
+                return "\n".join(picks)
+
+            if intent == "comfort_support":
+                if any(
+                    phrase in original.lower()
+                    for phrase in ("what can you do", "what you can do", "can you help", "help me")
+                ):
+                    return (
+                        f"I'm here with you, {USER_NAME}. "
+                        f"I can play calming music, open a breathing video, or just stay and talk."
+                    )
+                if browser:
+                    return browser.play_youtube("calming music for stress relief")
+                return (
+                    f"I'm here with you, {USER_NAME}. "
+                    f"Take a slow breath with me and tell me if you want music, breathing help, or just to talk."
+                )
 
             # ── WhatsApp ────────────────────────────────
             if intent == "whatsapp_msg":
                 contact = params.get("contact", "")
                 message = params.get("message", "")
                 if wa and contact and message:
+                    self._clear_pending_whatsapp()
                     self._last_whatsapp_contact = contact
                     return wa.send_message(contact, message)
+                if contact and not message:
+                    self._pending_whatsapp_contact = contact
+                    self._pending_whatsapp_message = ""
+                    return f"What message should I send to {contact}, {USER_NAME}?"
+                if message and not contact:
+                    self._pending_whatsapp_message = message
+                    self._pending_whatsapp_contact = ""
+                    return f"Who should I send that message to, {USER_NAME}?"
                 return f"Specify contact and message, {USER_NAME}."
             if intent == "whatsapp_call":
                 contact = params.get("contact", "")
@@ -1105,7 +1341,10 @@ class Brain:
             if intent == "analyze_screen":
                 if vision:
                     text = vision.read_screen_text()
-                    return self.ai.chat(f"Describe and analyze this screen content:\n{text}")
+                    return self.ai.chat(
+                        f"Describe and analyze this screen content:\n{text}",
+                        voice_mode=voice_mode,
+                    )
                 return "Vision not available."
             if intent == "read_clipboard":
                 try:
@@ -1127,7 +1366,7 @@ class Brain:
             log.error(f"Execution error [intent={intent}]: {e}")
             return f"Error executing '{intent}', {USER_NAME}: {e}"
 
-        return self.ai.chat(original)
+        return self.ai.chat(original, voice_mode=voice_mode)
 
     def _run_saved_workflow(self, memory, name: str) -> str:
         workflow = memory.get_workflow(name)
@@ -1154,27 +1393,39 @@ class Brain:
             return f"Workflow '{workflow['name']}' complete. {tail}"
         return f"Workflow '{workflow['name']}' complete, {USER_NAME}."
 
-    def _chat_with_memory(self, text: str) -> str:
+    def _chat_with_memory(self, text: str, voice_mode: bool = False) -> str:
         memory = self.tools.get("memory")
         if not memory:
-            return self.ai.chat(text)
+            return self.ai.chat(text, voice_mode=voice_mode)
 
         context_parts = []
 
-        memory_context = memory.build_context(text, max_items=6)
+        memory_context = memory.build_context(
+            text,
+            max_items=VOICE_MEMORY_CONTEXT_ITEMS if voice_mode else 6,
+        )
         if memory_context:
             context_parts.append(memory_context)
 
-        recent_history = memory.get_history(limit=4)
+        recent_history = memory.get_history(limit=VOICE_HISTORY_ITEMS if voice_mode else 4)
         if recent_history:
             convo_lines = []
-            for item in recent_history[-4:]:
+            tail_size = VOICE_HISTORY_ITEMS if voice_mode else 4
+            for item in recent_history[-tail_size:]:
                 convo_lines.append(f"User: {item['user']}")
                 convo_lines.append(f"Jarvis: {item['jarvis']}")
             context_parts.append("Recent conversation:\n" + "\n".join(convo_lines))
 
+        if voice_mode:
+            context_parts.append(
+                "Voice mode:\n"
+                "- Reply in one short sentence for normal commands.\n"
+                "- Keep confirmations ultra-brief.\n"
+                "- Only give longer detail when the request truly needs it."
+            )
+
         context = "\n\n".join(context_parts)
-        return self.ai.chat(text, context=context)
+        return self.ai.chat(text, context=context, voice_mode=voice_mode)
 
     # ─────────────────────────────────────────
     def _ask_confirmation(self, intent: str, params: dict) -> str:

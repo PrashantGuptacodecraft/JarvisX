@@ -4,7 +4,7 @@ from config.settings import USER_NAME, JARVIS_NAME
 from config.logger import get_logger
 log = get_logger("core_loop")
 
-WAKE_REPLY  = f"Hey {USER_NAME}, I'm here — what do you need?"
+WAKE_REPLY  = "Listening."
 SLEEP_REPLY = f"Going to standby. Say 'Hello {JARVIS_NAME}' whenever you need me."
 ALWAYS_LISTEN_REPLY = f"Always listening mode enabled, {USER_NAME}. You can speak commands without the wake word."
 WAKE_MODE_REPLY = f"Wake word mode enabled, {USER_NAME}. Say 'Hello {JARVIS_NAME}' when you need me."
@@ -34,6 +34,10 @@ class CoreLoop:
                 log.error(f"Core loop error: {e}")
 
     def _process(self, command: str):
+        voice_source = False
+        if command.startswith("__VOICE__:"):
+            voice_source = True
+            command = command[len("__VOICE__:"):].strip()
         command = command.strip()
         if command == "__WAKE__":
             self.on_wake()
@@ -67,7 +71,7 @@ class CoreLoop:
 
         log.info(f"Processing: {command}")
         try:
-            response = self.brain.process(command)
+            response = self.brain.process(command, voice_mode=voice_source)
         except Exception as e:
             log.error(f"Brain error: {e}")
             response = f"Something went wrong, {USER_NAME}: {e}"
@@ -99,10 +103,13 @@ class CoreLoop:
         else:
             print(f"\n[{JARVIS_NAME}]: {text}\n")
 
-    def on_wake(self):
+    def on_wake(self, acknowledge: bool = True):
         if self.gui:
             self.gui.set_status("listening")
-            self.gui.add_jarvis_message(WAKE_REPLY)
-        self._speak(WAKE_REPLY)
+        if acknowledge:
+            if self.gui:
+                self.gui.add_jarvis_message(WAKE_REPLY)
+            if not (self.speaker and hasattr(self.speaker, "acknowledge") and self.speaker.acknowledge()):
+                self._speak(WAKE_REPLY)
         if self.listener and hasattr(self.listener, "keep_active"):
             self.listener.keep_active()
