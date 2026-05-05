@@ -7,9 +7,12 @@ from config.settings import (
     GEMINI_KEY,
     OPENAI_KEY,
     GROQ_KEY,
+    XAI_KEY,
     GEMINI_MODEL,
     OPENAI_MODEL,
     GROQ_MODEL,
+    XAI_MODEL,
+    XAI_BASE_URL,
     JARVIS_NAME,
     USER_NAME,
 )
@@ -86,12 +89,13 @@ class AIClient:
             "gemini": bool(GEMINI_KEY),
             "openai": bool(OPENAI_KEY),
             "groq": bool(GROQ_KEY),
+            "xai": bool(XAI_KEY),
         }
         preferred = (AI_PROVIDER or "").lower().strip()
         order = []
-        if preferred in available:
+        if preferred in available and preferred != "auto":
             order.append(preferred)
-        for name in ("groq", "openai", "gemini"):
+        for name in ("groq", "xai", "openai", "gemini"):
             if name not in order:
                 order.append(name)
         return [name for name in order if available.get(name)]
@@ -121,6 +125,10 @@ class AIClient:
                 from groq import Groq
 
                 self.client = Groq(api_key=GROQ_KEY)
+            elif provider == "xai":
+                from openai import OpenAI
+
+                self.client = OpenAI(api_key=XAI_KEY, base_url=XAI_BASE_URL)
             else:
                 return False
             self.provider = provider
@@ -137,9 +145,13 @@ class AIClient:
         text = self._error_text(error)
         if "api_key_invalid" in text or "api key not valid" in text or "invalid api key" in text:
             return "invalid_key"
+        if "authentication" in text or "unauthorized" in text:
+            return "invalid_key"
         if "resource_exhausted" in text or "quota exceeded" in text or "rate limit" in text:
             return "quota"
         if "not found for api version" in text or "not supported for generatecontent" in text:
+            return "bad_model"
+        if "model_decommissioned" in text or "model not found" in text:
             return "bad_model"
         if "timed out" in text or "connection" in text or "network" in text:
             return "network"
@@ -177,6 +189,13 @@ class AIClient:
         self.last_error_kind = self._classify_error(error)
         return False
 
+    def _provider_model_name(self, provider: str) -> str:
+        return {
+            "openai": OPENAI_MODEL,
+            "groq": GROQ_MODEL,
+            "xai": XAI_MODEL,
+        }.get(provider, "")
+
     def chat(self, user_message: str, context: str = "") -> str:
         if self.provider == "none" or self.client is None:
             return self._offline_reply(user_message)
@@ -213,25 +232,18 @@ class AIClient:
                     if gemini_error:
                         raise gemini_error
 
-                if current_provider in ("openai", "groq"):
+                if current_provider in ("openai", "groq", "xai"):
                     self.history.append({"role": "user", "content": full_msg})
                     messages = [{"role": "system", "content": SYSTEM_PROMPT}] + [
                         {"role": h["role"], "content": h["content"]}
                         for h in self.history[-24:]
                         if "content" in h
                     ]
-                    if current_provider == "openai":
-                        resp = self.client.chat.completions.create(
-                            model=OPENAI_MODEL,
-                            messages=messages,
-                            max_tokens=600,
-                        )
-                    else:
-                        resp = self.client.chat.completions.create(
-                            model=GROQ_MODEL,
-                            messages=messages,
-                            max_tokens=600,
-                        )
+                    resp = self.client.chat.completions.create(
+                        model=self._provider_model_name(current_provider),
+                        messages=messages,
+                        max_tokens=600,
+                    )
                     reply = resp.choices[0].message.content or ""
                     self.history.append({"role": "assistant", "content": reply})
                     return reply.strip()
@@ -242,7 +254,7 @@ class AIClient:
                 last_error = e
                 if current_provider == "gemini" and self.history and self.history[-1]["role"] == "user":
                     self.history.pop()
-                elif current_provider in ("openai", "groq") and self.history and self.history[-1].get("role") == "user":
+                elif current_provider in ("openai", "groq", "xai") and self.history and self.history[-1].get("role") == "user":
                     self.history.pop()
                 if not self._fallback_from(current_provider, e):
                     break
@@ -274,12 +286,18 @@ Text: "{text}"
         self.history = []
 
     def _offline_reason(self) -> str:
+        provider_label = {
+            "groq": "Groq",
+            "xai": "xAI Grok",
+            "openai": "OpenAI",
+            "gemini": "Gemini",
+        }.get(self.provider or "", "AI provider")
         if self.last_error_kind == "invalid_key":
-            return "Your Gemini API key was rejected. Replace `GEMINI_API_KEY` in `.env` with a valid key."
+            return f"Your {provider_label} API key was rejected. Check the matching key in `.env`."
         if self.last_error_kind == "quota":
-            return "Your AI provider is reachable, but the current Gemini quota is exhausted. Add billing, wait for quota reset, or switch providers in `.env`."
+            return f"{provider_label} is reachable, but the current quota is exhausted. Add billing, wait for quota reset, or switch providers in `.env`."
         if self.last_error_kind == "bad_model":
-            return "The configured Gemini model is unavailable. Set `GEMINI_MODEL=gemini-2.0-flash` in `.env`."
+            return f"The configured {provider_label} model is unavailable. Update the model name in `.env`."
         if self.last_error_kind == "network":
             return "The provider could not be reached. Check your internet connection and firewall."
         return "Check internet access or your API key in `.env`."

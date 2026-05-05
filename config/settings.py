@@ -5,7 +5,22 @@ from dotenv import load_dotenv
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
+
+def _normalize_provider_name(value: str) -> str:
+    mapping = {
+        "": "auto",
+        "auto": "auto",
+        "google": "gemini",
+        "gemini": "gemini",
+        "openai": "openai",
+        "groq": "groq",
+        "grok": "xai",
+        "xai": "xai",
+    }
+    return mapping.get((value or "").strip().lower(), (value or "").strip().lower())
+
 WORKSPACE_DIR = Path(os.getenv("JARVIS_WORKSPACE", BASE_DIR / "JarvisWorkspace"))
+KNOWLEDGE_DIR = WORKSPACE_DIR / "knowledge"
 
 JARVIS_NAME  = os.getenv("JARVIS_NAME",  "Jarvis")
 USER_NAME    = os.getenv("USER_NAME",    "Sir")
@@ -32,13 +47,16 @@ VOICE_DYNAMIC_ENERGY = os.getenv("VOICE_DYNAMIC_ENERGY", "true").lower() == "tru
 VOICE_PAUSE_THRESHOLD = float(os.getenv("VOICE_PAUSE_THRESHOLD", "0.8"))
 VOICE_AMBIENT_SECONDS = float(os.getenv("VOICE_AMBIENT_SECONDS", "0.8"))
 
-AI_PROVIDER  = os.getenv("AI_PROVIDER",  "gemini")
-GEMINI_KEY   = os.getenv("GEMINI_API_KEY",  "")
-OPENAI_KEY   = os.getenv("OPENAI_API_KEY",  "")
-GROQ_KEY     = os.getenv("GROQ_API_KEY",    "")
+AI_PROVIDER  = _normalize_provider_name(os.getenv("AI_PROVIDER", "auto"))
+GEMINI_KEY   = os.getenv("GEMINI_API_KEY", "").strip()
+OPENAI_KEY   = os.getenv("OPENAI_API_KEY", "").strip()
+GROQ_KEY     = os.getenv("GROQ_API_KEY", "").strip()
+XAI_KEY      = os.getenv("XAI_API_KEY", os.getenv("GROK_API_KEY", "")).strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-GROQ_MODEL   = os.getenv("GROQ_MODEL",   "llama3-70b-8192")
+GROQ_MODEL   = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+XAI_MODEL    = os.getenv("XAI_MODEL", os.getenv("GROK_MODEL", "grok-4.20-reasoning")).strip()
+XAI_BASE_URL = os.getenv("XAI_BASE_URL", "https://api.x.ai/v1").strip()
 
 ELEVENLABS_KEY      = os.getenv("ELEVENLABS_API_KEY",  "")
 ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "")
@@ -56,13 +74,23 @@ TTS_PITCH           = os.getenv("TTS_PITCH", "+4Hz").strip()
 TTS_VOLUME          = os.getenv("TTS_VOLUME", "+0%").strip()
 
 LOGS_DIR = BASE_DIR / "logs"
-DB_PATH  = BASE_DIR / "jarvis_memory.db"
+LOCAL_DATA_DIR = WORKSPACE_DIR / ".jarvis_state"
+DEFAULT_DB_PATH = BASE_DIR / "jarvis_memory.db"
+DB_PATH  = Path(os.getenv("JARVIS_DB_PATH", str(DEFAULT_DB_PATH)))
+FALLBACK_DB_PATH = LOCAL_DATA_DIR / "jarvis_memory_store.db"
 LOGS_DIR.mkdir(exist_ok=True)
 WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
+KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
+LOCAL_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 def get_active_provider() -> str:
     pref = AI_PROVIDER.lower()
-    mapping = [("gemini", GEMINI_KEY), ("openai", OPENAI_KEY), ("groq", GROQ_KEY)]
+    mapping = [
+        ("groq", GROQ_KEY),
+        ("xai", XAI_KEY),
+        ("openai", OPENAI_KEY),
+        ("gemini", GEMINI_KEY),
+    ]
     for name, key in mapping:
         if pref == name and key:
             return name

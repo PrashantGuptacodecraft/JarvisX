@@ -59,6 +59,7 @@ Thumbs.db
 # Runtime and database files (DO NOT upload)
 *.log
 *.db
+*.db-*
 *.sqlite
 *.sqlite3
 jarvis_memory.db

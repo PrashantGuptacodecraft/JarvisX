@@ -61,7 +61,7 @@ def build_jarvis(gui=None, command_queue=None):
         "apps": AppController(),
         "browser": BrowserController(),
         "system": SystemController(),
-        "whatsapp": WhatsAppController(),
+        "whatsapp": WhatsAppController(memory=memory),
         "files": FilesController(),
         "vision": VisionController(),
         "terminal": terminal,

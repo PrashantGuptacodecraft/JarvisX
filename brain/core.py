@@ -7,7 +7,7 @@ import json
 import re
 from difflib import get_close_matches
 from config.logger import get_logger
-from config.settings import USER_NAME
+from config.settings import KNOWLEDGE_DIR, USER_NAME
 
 log = get_logger("brain")
 
@@ -27,6 +27,16 @@ INTENTS = {
     "open_gmail":     ["open gmail", "check gmail", "my email", "open mail", "check mail"],
     "open_github":    ["open github", "go to github"],
     "open_whatsapp_web": ["open whatsapp", "whatsapp web"],
+    "add_whatsapp_contact": ["add whatsapp contact", "save whatsapp contact", "remember whatsapp contact"],
+    "list_whatsapp_contacts": ["list whatsapp contacts", "show whatsapp contacts", "my whatsapp contacts"],
+    "save_profile": ["remember profile", "save profile", "my profile is"],
+    "show_profile": ["show my profile", "list my profile", "what is in my profile"],
+    "save_project_memory": ["save project", "remember project", "update project"],
+    "show_project_memory": ["show project", "project details for", "what do you know about project"],
+    "list_projects": ["list projects", "show projects", "my projects"],
+    "ingest_knowledge_file": ["learn file", "ingest file", "import knowledge file", "remember this file"],
+    "list_knowledge_files": ["list knowledge files", "show knowledge files", "list brain files"],
+    "brain_status": ["brain status", "memory status", "knowledge status"],
     # Email compose
     "compose_email":  ["write email", "compose email", "write a mail", "compose mail",
                        "send email", "send mail", "write mail to", "email to ",
@@ -182,7 +192,7 @@ class Brain:
         if intent:
             return self.execute_intent(intent, params, text)
 
-        return self.ai.chat(text)
+        return self._chat_with_memory(text)
 
     # ─────────────────────────────────────────
     def _detect_intent(self, low: str, original: str):
@@ -195,6 +205,22 @@ class Brain:
             params = self._extract_params(intent, low, original)
             if params.get("contact"):
                 return intent, params
+        if self._looks_like_profile_save(low):
+            return "save_profile", self._extract_params("save_profile", low, original)
+        if self._looks_like_profile_show(low):
+            return "show_profile", self._extract_params("show_profile", low, original)
+        if self._looks_like_project_save(low):
+            return "save_project_memory", self._extract_params("save_project_memory", low, original)
+        if self._looks_like_project_show(low):
+            return "show_project_memory", self._extract_params("show_project_memory", low, original)
+        if self._looks_like_project_list(low):
+            return "list_projects", self._extract_params("list_projects", low, original)
+        if self._looks_like_knowledge_ingest(low):
+            return "ingest_knowledge_file", self._extract_params("ingest_knowledge_file", low, original)
+        if self._looks_like_knowledge_list(low):
+            return "list_knowledge_files", self._extract_params("list_knowledge_files", low, original)
+        if self._looks_like_brain_status(low):
+            return "brain_status", self._extract_params("brain_status", low, original)
         if self._looks_like_folder_open(low):
             return "open_folder", self._extract_params("open_folder", low, original)
         if any(kw in low for kw in INTENTS["search_youtube"]):
@@ -241,6 +267,46 @@ class Brain:
         if not re.search(r"\bdownload\b", low):
             return False
         return not any(word in low for word in ["shutdown", "upload", "speed test"])
+
+    def _looks_like_profile_save(self, low: str) -> bool:
+        return bool(
+            re.search(r"\b(?:remember|save)\s+profile\b", low)
+            or low.startswith("my profile is ")
+        )
+
+    def _looks_like_profile_show(self, low: str) -> bool:
+        return bool(
+            re.search(r"\b(?:show|list)\s+(?:my\s+)?profile\b", low)
+            or "what is in my profile" in low
+        )
+
+    def _looks_like_project_save(self, low: str) -> bool:
+        return bool(re.search(r"\b(?:save|remember|update)\s+project\b", low))
+
+    def _looks_like_project_show(self, low: str) -> bool:
+        return bool(
+            re.search(r"\b(?:show|open)\s+project\b", low)
+            or "project details for" in low
+            or "what do you know about project" in low
+        )
+
+    def _looks_like_project_list(self, low: str) -> bool:
+        return bool(re.search(r"\b(?:list|show)\s+projects\b", low) or "my projects" in low)
+
+    def _looks_like_knowledge_ingest(self, low: str) -> bool:
+        return bool(
+            re.search(r"\b(?:learn|ingest|import|remember)\s+(?:knowledge\s+)?file\b", low)
+            or "remember this file" in low
+        )
+
+    def _looks_like_knowledge_list(self, low: str) -> bool:
+        return bool(
+            re.search(r"\b(?:list|show)\s+(?:knowledge|brain)\s+files\b", low)
+            or "knowledge files" in low
+        )
+
+    def _looks_like_brain_status(self, low: str) -> bool:
+        return "brain status" in low or "memory status" in low or "knowledge status" in low
 
     def _looks_like_folder_open(self, low: str) -> bool:
         if "open " not in low:
@@ -345,6 +411,79 @@ class Brain:
                 p["contact"] = self._last_whatsapp_contact
             else:
                 p["contact"] = self._clean_contact_name(stripped)
+
+        elif intent == "add_whatsapp_contact":
+            match = re.search(
+                r'(?:add|save|remember)\s+whatsapp\s+contact\s+(.+?)\s+(\+?\d[\d\s-]{7,}\d)\s*$',
+                original,
+                re.IGNORECASE,
+            )
+            if match:
+                p["contact"] = self._clean_contact_name(match.group(1))
+                p["phone"] = match.group(2).strip()
+
+        elif intent == "save_profile":
+            text = re.sub(r'^(?:remember|save)\s+profile(?:\s+that)?\s+', "", original, flags=re.IGNORECASE).strip()
+            text = re.sub(r'^my\s+profile\s+is\s+', "", text, flags=re.IGNORECASE).strip()
+            p["text"] = text.strip(" :-")
+
+        elif intent == "show_profile":
+            p["text"] = original
+
+        elif intent == "save_project_memory":
+            body = re.sub(r'^(?:save|remember|update)\s+project\s+', "", original, flags=re.IGNORECASE).strip()
+            match = re.match(r'(.+?)(?:\s*[:|-]\s*|\s+that\s+|\s+is\s+)(.+)', body, flags=re.IGNORECASE)
+            if match:
+                p["name"] = match.group(1).strip(" ,.-")
+                p["details"] = match.group(2).strip()
+            else:
+                p["name"] = body.strip(" ,.-")
+                p["details"] = ""
+            status_match = re.search(r'\bstatus\s*[:=-]?\s*([^;|]+)', p.get("details", ""), re.IGNORECASE)
+            next_steps_match = re.search(r'\bnext\s+steps?\s*[:=-]?\s*([^;|]+)', p.get("details", ""), re.IGNORECASE)
+            tags_match = re.search(r'\btags?\s*[:=-]?\s*([^;|]+)', p.get("details", ""), re.IGNORECASE)
+            if status_match:
+                p["status"] = status_match.group(1).strip(" ,.")
+            if next_steps_match:
+                p["next_steps"] = next_steps_match.group(1).strip(" ,.")
+            if tags_match:
+                p["tags"] = tags_match.group(1).strip(" ,.")
+            cleaned_details = p.get("details", "")
+            cleaned_details = re.sub(r'\bstatus\s*[:=-]?\s*[^;|]+', "", cleaned_details, flags=re.IGNORECASE)
+            cleaned_details = re.sub(r'\bnext\s+steps?\s*[:=-]?\s*[^;|]+', "", cleaned_details, flags=re.IGNORECASE)
+            cleaned_details = re.sub(r'\btags?\s*[:=-]?\s*[^;|]+', "", cleaned_details, flags=re.IGNORECASE)
+            cleaned_details = re.sub(r'[|;]+', " ", cleaned_details)
+            cleaned_details = re.sub(r'\s+', " ", cleaned_details).strip(" ,.-")
+            if cleaned_details:
+                p["details"] = cleaned_details
+
+        elif intent == "show_project_memory":
+            name = re.sub(
+                r'^(?:show\s+project|project\s+details\s+for|what\s+do\s+you\s+know\s+about\s+project)\s+',
+                "",
+                original,
+                flags=re.IGNORECASE,
+            ).strip()
+            p["name"] = name.strip(" ,.-")
+
+        elif intent == "list_projects":
+            p["text"] = original
+
+        elif intent == "ingest_knowledge_file":
+            path_text = re.sub(
+                r'^(?:learn|ingest|import|remember)\s+(?:knowledge\s+)?file\s+',
+                "",
+                original,
+                flags=re.IGNORECASE,
+            ).strip()
+            path_text = re.sub(r'^remember\s+this\s+file\s+', "", path_text, flags=re.IGNORECASE).strip()
+            p["path"] = path_text.strip(" :")
+
+        elif intent == "list_knowledge_files":
+            p["text"] = original
+
+        elif intent == "brain_status":
+            p["text"] = original
 
         elif intent == "compose_email":
             # Extract: to, subject, body from natural speech
@@ -525,6 +664,102 @@ class Brain:
                 return browser.open_url("github")
             if intent == "open_whatsapp_web":
                 return browser.open_url("whatsapp")
+            if intent == "add_whatsapp_contact":
+                contact = params.get("contact", "")
+                phone = params.get("phone", "")
+                if wa and contact and phone:
+                    return wa.add_contact(contact, phone)
+                return f"Tell me the contact name and phone number, {USER_NAME}."
+            if intent == "list_whatsapp_contacts":
+                if wa:
+                    return wa.list_contacts()
+                return f"WhatsApp contact manager is not available, {USER_NAME}."
+            if intent == "save_profile":
+                if memory:
+                    return memory.save_profile_item(params.get("text", ""))
+                return f"Memory manager is not available, {USER_NAME}."
+            if intent == "show_profile":
+                if memory:
+                    return memory.profile_summary()
+                return f"Memory manager is not available, {USER_NAME}."
+            if intent == "save_project_memory":
+                if memory:
+                    return memory.save_project(
+                        params.get("name", ""),
+                        params.get("details", ""),
+                        status=params.get("status", ""),
+                        next_steps=params.get("next_steps", ""),
+                        tags=params.get("tags", ""),
+                    )
+                return f"Project memory is not available, {USER_NAME}."
+            if intent == "show_project_memory":
+                if memory:
+                    project = memory.get_project(params.get("name", ""))
+                    if not project:
+                        return f"I couldn't find that project in memory, {USER_NAME}."
+                    parts = [
+                        f"Project: {project['name']}",
+                        f"Summary: {project['summary']}",
+                    ]
+                    if project.get("status"):
+                        parts.append(f"Status: {project['status']}")
+                    if project.get("next_steps"):
+                        parts.append(f"Next steps: {project['next_steps']}")
+                    if project.get("tags"):
+                        parts.append(f"Tags: {project['tags']}")
+                    if project.get("details") and project["details"] != project["summary"]:
+                        parts.append(f"Details: {project['details']}")
+                    return "\n".join(parts)
+                return f"Project memory is not available, {USER_NAME}."
+            if intent == "list_projects":
+                if memory:
+                    projects = memory.list_projects()
+                    if not projects:
+                        return f"No projects saved yet, {USER_NAME}."
+                    lines = []
+                    for item in projects[:10]:
+                        line = f"- {item['name']}: {item['summary']}"
+                        if item.get("status"):
+                            line += f" | Status: {item['status']}"
+                        lines.append(line)
+                    return "Tracked projects:\n" + "\n".join(lines)
+                return f"Project memory is not available, {USER_NAME}."
+            if intent == "ingest_knowledge_file":
+                if not files or not memory:
+                    return f"Knowledge ingestion is not available, {USER_NAME}."
+                path, content = files.extract_text(params.get("path", ""), max_chars=8000)
+                if not path:
+                    return content
+                if not content or not content.strip():
+                    return f"I couldn't extract usable text from {params.get('path', 'that file')}, {USER_NAME}."
+                return memory.save_knowledge_document(path.stem, str(path), content)
+            if intent == "list_knowledge_files":
+                if memory:
+                    docs = memory.list_knowledge_documents()
+                    if not docs:
+                        return (
+                            f"No knowledge files saved yet, {USER_NAME}. "
+                            f"Drop files into {KNOWLEDGE_DIR} and say 'learn file <name>'."
+                        )
+                    lines = [f"- {item['title']}: {item['source_path']}" for item in docs[:10]]
+                    return "Knowledge files:\n" + "\n".join(lines)
+                return f"Knowledge library is not available, {USER_NAME}."
+            if intent == "brain_status":
+                if memory:
+                    stats = memory.brain_overview()
+                    return (
+                        f"Brain status, {USER_NAME}:\n"
+                        f"- Profile entries: {stats['profile_entries']}\n"
+                        f"- Projects: {stats['projects']}\n"
+                        f"- Knowledge files: {stats['knowledge_docs']}\n"
+                        f"- Contacts: {stats['contacts']}\n"
+                        f"- Notes: {stats['notes']}\n"
+                        f"- Facts: {stats['facts']}\n"
+                        f"- Conversations stored: {stats['history']}\n"
+                        f"- Memory DB: {stats['db_path']}\n"
+                        f"- Knowledge folder: {KNOWLEDGE_DIR}"
+                    )
+                return f"Brain status is unavailable, {USER_NAME}."
             if intent == "compose_email":
                 to      = params.get("to", "")
                 subject = params.get("subject", "")
@@ -685,6 +920,28 @@ class Brain:
             return f"Error executing '{intent}', {USER_NAME}: {e}"
 
         return self.ai.chat(original)
+
+    def _chat_with_memory(self, text: str) -> str:
+        memory = self.tools.get("memory")
+        if not memory:
+            return self.ai.chat(text)
+
+        context_parts = []
+
+        memory_context = memory.build_context(text, max_items=6)
+        if memory_context:
+            context_parts.append(memory_context)
+
+        recent_history = memory.get_history(limit=4)
+        if recent_history:
+            convo_lines = []
+            for item in recent_history[-4:]:
+                convo_lines.append(f"User: {item['user']}")
+                convo_lines.append(f"Jarvis: {item['jarvis']}")
+            context_parts.append("Recent conversation:\n" + "\n".join(convo_lines))
+
+        context = "\n\n".join(context_parts)
+        return self.ai.chat(text, context=context)
 
     # ─────────────────────────────────────────
     def _ask_confirmation(self, intent: str, params: dict) -> str:

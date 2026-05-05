@@ -26,8 +26,17 @@ WINDOW_TITLES = ["WhatsApp", "WhatsApp Beta"]
 
 
 class WhatsAppController:
-    def __init__(self):
+    def __init__(self, memory=None):
         self._whatsapp_ready = False
+        self.memory = memory
+
+    def _lookup_saved_phone(self, contact: str) -> str:
+        contact_clean = (contact or "").lower().strip()
+        if self.memory:
+            phone = self.memory.get_contact_phone(contact_clean, channel="whatsapp")
+            if phone:
+                return phone
+        return CONTACT_NUMBERS.get(contact_clean, "")
 
     def send_message(self, contact: str, message: str) -> str:
         if not contact or not message:
@@ -36,7 +45,7 @@ class WhatsAppController:
         contact_clean = contact.lower().strip()
         log.info(f"WhatsApp desktop preferred -> {contact}: {message}")
 
-        phone = CONTACT_NUMBERS.get(contact_clean)
+        phone = self._lookup_saved_phone(contact_clean)
         if phone:
             threading.Thread(
                 target=self._send_via_desktop_link,
@@ -140,11 +149,14 @@ class WhatsAppController:
             )
 
     def add_contact(self, name: str, phone: str) -> str:
-        CONTACT_NUMBERS[name.lower()] = phone.replace("+", "").replace(" ", "")
-        return (
-            f"Contact saved: {name} -> {phone}, {USER_NAME}. "
-            f"To make this permanent, add it to CONTACT_NUMBERS in tools/whatsapp/controller.py"
-        )
+        if self.memory:
+            ok, result = self.memory.save_contact(name, phone, channel="whatsapp")
+            if ok:
+                return f"WhatsApp contact saved: {name} -> +{result}, {USER_NAME}."
+            return f"I couldn't save that contact, {USER_NAME}. {result}"
+
+        CONTACT_NUMBERS[name.lower()] = "".join(ch for ch in phone if ch.isdigit())
+        return f"Contact saved for this session: {name} -> {phone}, {USER_NAME}."
 
     def open_whatsapp(self) -> str:
         if self._open_desktop_app():
@@ -155,13 +167,19 @@ class WhatsAppController:
         return f"Opening WhatsApp Web, {USER_NAME}."
 
     def list_contacts(self) -> str:
-        if not CONTACT_NUMBERS:
+        saved = []
+        if self.memory:
+            saved = self.memory.list_contacts(channel="whatsapp")
+        merged = {item["name"]: item["phone"] for item in saved}
+        for name, num in CONTACT_NUMBERS.items():
+            merged.setdefault(name, num)
+
+        if not merged:
             return (
                 f"No contacts saved yet, {USER_NAME}. "
-                f"Add them to CONTACT_NUMBERS in tools/whatsapp/controller.py "
-                f"or say 'add whatsapp contact Abhishek Tripathi 91XXXXXXXXXX'"
+                f"Say 'add whatsapp contact Abhishek Tripathi 91XXXXXXXXXX' to save one."
             )
-        lines = "\n".join(f"  - {name.title()}: +{num}" for name, num in CONTACT_NUMBERS.items())
+        lines = "\n".join(f"  - {name.title()}: +{num}" for name, num in sorted(merged.items()))
         return f"Saved WhatsApp contacts:\n{lines}"
 
     def _open_desktop_app(self) -> bool:
