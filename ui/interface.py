@@ -7,8 +7,9 @@ Canvas HUD with animated rings + particles, tabbed interface
 import math, random, threading, datetime, time
 import queue as q_module
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import ttk, scrolledtext
-from config.settings import JARVIS_NAME, USER_NAME, WAKE_WORD
+from config.settings import JARVIS_NAME, USER_NAME, WAKE_WORD, OPERATOR_MODE
 
 # ── Palette ────────────────────────────────────────────────────
 BG0    = "#040810"   # deepest background
@@ -46,6 +47,13 @@ FONT_MONO_LG = ("Courier New", 12)
 FONT_MONO_SM = ("Courier New", 9)
 FONT_TITLE = ("Courier New", 18, "bold")
 
+BASE_WIDTH = 1100
+BASE_HEIGHT = 740
+MIN_WIDTH = 900
+MIN_HEIGHT = 620
+SIDEBAR_BASE_WIDTH = 250
+HUD_BASE_SIZE = 220
+
 
 # ═══════════════════════════════════════════════════════════════
 class HUDCanvas(tk.Canvas):
@@ -53,18 +61,20 @@ class HUDCanvas(tk.Canvas):
     Animated holographic HUD visualizer.
     Multiple rotating rings, particle field, pulsing center.
     """
-    W = H = 220
+    DEFAULT_SIZE = 220
 
-    def __init__(self, parent, **kw):
-        super().__init__(parent, width=self.W, height=self.H,
+    def __init__(self, parent, size=None, **kw):
+        size = size or self.DEFAULT_SIZE
+        super().__init__(parent, width=size, height=size,
                          bg=BG1, highlightthickness=0, **kw)
-        self.cx = self.cy = self.W // 2
+        self.W = self.H = size
+        self.cx = self.cy = size // 2
         self.status = "sleeping"
         self._angle1 = 0.0   # outer ring
         self._angle2 = 0.0   # mid ring (counter)
         self._angle3 = 0.0   # inner ring
         self._pulse  = 0.0   # center pulse
-        self._particles = self._make_particles(22)
+        self._particles = self._make_particles(max(18, size // 10))
         self._running = True
         self._draw()
 
@@ -73,6 +83,15 @@ class HUDCanvas(tk.Canvas):
 
     def stop(self):
         self._running = False
+
+    def resize(self, size: int):
+        size = max(180, int(size))
+        if size == self.W:
+            return
+        self.W = self.H = size
+        self.cx = self.cy = size // 2
+        self.configure(width=size, height=size)
+        self._particles = self._make_particles(max(18, size // 10))
 
     # ── Particles ───────────────────────────────────────────
     def _make_particles(self, n: int) -> list:
@@ -107,9 +126,17 @@ class HUDCanvas(tk.Canvas):
 
         self.delete("all")
         cx, cy = self.cx, self.cy
+        outer_r = int(self.W * 0.48)
+        mid_r = int(self.W * 0.40)
+        inner_r = int(self.W * 0.31)
+        grid_r = int(self.W * 0.43)
 
         # Background gradient (concentric dark circles)
-        for r, c in [(105, "#06101e"), (90, "#070d18"), (72, "#060c16")]:
+        for r, c in [
+            (int(self.W * 0.48), "#06101e"),
+            (int(self.W * 0.41), "#070d18"),
+            (int(self.W * 0.33), "#060c16"),
+        ]:
             self.create_oval(cx-r, cy-r, cx+r, cy+r, fill=c, outline="")
 
         # Particles
@@ -124,49 +151,54 @@ class HUDCanvas(tk.Canvas):
         # Tick marks (outer)
         for i in range(36):
             ang = math.radians(i * 10)
-            len_ = 6 if i % 3 == 0 else 3
-            x1 = cx + 100 * math.cos(ang)
-            y1 = cy + 100 * math.sin(ang)
-            x2 = cx + (100 - len_) * math.cos(ang)
-            y2 = cy + (100 - len_) * math.sin(ang)
+            len_ = max(3, int(self.W * (0.028 if i % 3 == 0 else 0.014)))
+            x1 = cx + outer_r * math.cos(ang)
+            y1 = cy + outer_r * math.sin(ang)
+            x2 = cx + (outer_r - len_) * math.cos(ang)
+            y2 = cy + (outer_r - len_) * math.sin(ang)
             tick_c = self._alpha_hex(color, 60 if i % 3 == 0 else 30)
             self.create_line(x1, y1, x2, y2, fill=tick_c, width=1)
 
         # Outer ring (rotating dash arc)
         ext = 280 if self.status != "sleeping" else 120
-        self._draw_arc(cx, cy, 98, self._angle1, ext, color, 2)
+        self._draw_arc(cx, cy, int(self.W * 0.445), self._angle1, ext, color, 2)
 
         # Mid ring (counter-rotating)
         ext2 = 200 if self.status == "thinking" else 100
-        self._draw_arc(cx, cy, 80, self._angle2, ext2,
+        self._draw_arc(cx, cy, mid_r, self._angle2, ext2,
                        self._alpha_hex(color, 130), 1)
 
         # Inner ring
         ext3 = 160 if self.status in ("listening","speaking") else 60
-        self._draw_arc(cx, cy, 62, self._angle3, ext3,
+        self._draw_arc(cx, cy, inner_r, self._angle3, ext3,
                        self._alpha_hex(color, 100), 1)
 
         # Grid lines (horizontal/vertical)
         self._draw_grid(cx, cy, color)
 
         # Center glow
-        pulse_r = 3 + 2 * math.sin(self._pulse)
-        glow_layers = [(28, 20), (22, 40), (17, 70), (13, 120)]
+        pulse_r = max(3, int(self.W * 0.012)) + 2 * math.sin(self._pulse)
+        glow_layers = [
+            (int(self.W * 0.13), 20),
+            (int(self.W * 0.10), 40),
+            (int(self.W * 0.08), 70),
+            (int(self.W * 0.06), 120),
+        ]
         for rad, alpha in glow_layers:
             c = self._alpha_hex(color, alpha)
             self.create_oval(cx-rad, cy-rad, cx+rad, cy+rad,
                              fill=c, outline="")
 
         # Center hex background
-        self._draw_hex(cx, cy, 14, BG0, color)
+        self._draw_hex(cx, cy, max(12, int(self.W * 0.065)), BG0, color)
 
         # Center text "J"
         self.create_text(cx, cy, text="J", fill=color,
-                         font=("Courier New", 14, "bold"))
+                         font=("Consolas", max(14, int(self.W * 0.065)), "bold"))
 
         # Status ring (thin colored border)
         pulse_extra = 2 * math.sin(self._pulse * 2)
-        sr = 50 + pulse_extra
+        sr = int(self.W * 0.23) + pulse_extra
         self.create_oval(cx-sr, cy-sr, cx+sr, cy+sr,
                          outline=self._alpha_hex(color, 80), width=1)
 
@@ -179,10 +211,12 @@ class HUDCanvas(tk.Canvas):
 
     def _draw_grid(self, cx, cy, color):
         lc = self._alpha_hex(color, 18)
-        for offset in [-40, 0, 40]:
-            self.create_line(cx + offset, cy - 95, cx + offset, cy + 95,
+        grid_r = int(self.W * 0.43)
+        offset = int(self.W * 0.18)
+        for delta in [-offset, 0, offset]:
+            self.create_line(cx + delta, cy - grid_r, cx + delta, cy + grid_r,
                              fill=lc, width=1)
-            self.create_line(cx - 95, cy + offset, cx + 95, cy + offset,
+            self.create_line(cx - grid_r, cy + delta, cx + grid_r, cy + delta,
                              fill=lc, width=1)
 
     def _draw_hex(self, cx, cy, size, fill, outline):
@@ -242,22 +276,40 @@ class WaveformBar(tk.Canvas):
 # ═══════════════════════════════════════════════════════════════
 class MetricBar(tk.Frame):
     """Animated metric bar (CPU / RAM / Disk)."""
-    def __init__(self, parent, label: str, color: str = CYAN, **kw):
+    def __init__(self, parent, label: str, color: str = CYAN,
+                 label_font=None, value_font=None, bar_width: int = 110, **kw):
         super().__init__(parent, bg=BG1, **kw)
         self._color = color
-        tk.Label(self, text=label, font=FONT_MONO_SM, fg=TEXT2,
-                 bg=BG1, width=4, anchor="w").pack(side="left")
-        self._canvas = tk.Canvas(self, width=110, height=10,
+        self._bar_width = bar_width
+        self._last_pct = 0.0
+        self._label = tk.Label(self, text=label, font=label_font or FONT_MONO_SM,
+                               fg=TEXT2, bg=BG1, width=4, anchor="w")
+        self._label.pack(side="left")
+        self._canvas = tk.Canvas(self, width=self._bar_width, height=10,
                                  bg=BG2, highlightthickness=0)
         self._canvas.pack(side="left", padx=4)
         self._pct_var = tk.StringVar(value="  0%")
-        tk.Label(self, textvariable=self._pct_var, font=FONT_MONO_SM,
-                 fg=TEXT1, bg=BG1, width=5).pack(side="left")
+        self._value = tk.Label(self, textvariable=self._pct_var,
+                               font=value_font or FONT_MONO_SM,
+                               fg=TEXT1, bg=BG1, width=5)
+        self._value.pack(side="left")
+
+    def resize(self, bar_width: int):
+        self._bar_width = max(110, int(bar_width))
+        self._canvas.configure(width=self._bar_width)
+        self.update_value(self._last_pct)
+
+    def update_fonts(self, label_font=None, value_font=None):
+        if label_font:
+            self._label.configure(font=label_font)
+        if value_font:
+            self._value.configure(font=value_font)
 
     def update_value(self, pct: float):
+        self._last_pct = pct
         self._canvas.delete("all")
-        self._canvas.create_rectangle(0, 0, 110, 10, fill=BG2, outline="")
-        w = int(pct / 100 * 110)
+        self._canvas.create_rectangle(0, 0, self._bar_width, 10, fill=BG2, outline="")
+        w = int(pct / 100 * self._bar_width)
         if w > 0:
             self._canvas.create_rectangle(0, 0, w, 10, fill=self._color, outline="")
         self._pct_var.set(f"{pct:4.0f}%")
@@ -278,52 +330,179 @@ class JarvisGUI:
         self._running      = True
         self._term_lines   = []
         self._sys_update_running = False
+        self._is_fullscreen = False
+        self._resize_job = None
+        self._font_scale = 1.0
 
         self.root = tk.Tk()
         self.root.title(f"J.A.R.V.I.S — Advanced AI System")
-        self.root.geometry("1100x740")
-        self.root.minsize(900, 620)
+        self.root.geometry(f"{BASE_WIDTH}x{BASE_HEIGHT}")
+        self.root.minsize(MIN_WIDTH, MIN_HEIGHT)
         self.root.configure(bg=BG0)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
+        self._init_fonts()
         self._center_window()
         self._apply_style()
         self._build_ui()
+        self.root.bind("<F11>", self._toggle_fullscreen)
+        self.root.bind("<Escape>", self._exit_fullscreen)
+        self.root.bind("<Configure>", self._handle_resize)
+        self.root.after(80, self._apply_responsive_scale)
         self._start_clock()
         self._start_sys_monitor()
 
     # ── Setup ────────────────────────────────────────────────
+    def _init_fonts(self):
+        self._font_specs = {}
+        self._fonts = {}
+
+        def make(name, size, weight="normal", slant="roman"):
+            self._font_specs[name] = {
+                "family": "Consolas",
+                "size": size,
+                "weight": weight,
+                "slant": slant,
+            }
+            self._fonts[name] = tkfont.Font(
+                family="Consolas",
+                size=size,
+                weight=weight,
+                slant=slant,
+            )
+
+        make("body_sm", 10)
+        make("body", 11)
+        make("body_lg", 13)
+        make("title", 24, "bold")
+        make("subtitle", 10)
+        make("status", 11, "bold")
+        make("clock", 16)
+        make("button", 10, "bold")
+        make("section", 10, "bold")
+        make("tab", 10, "bold")
+        make("input", 14)
+        make("chat_user", 13, "bold")
+        make("chat_jarvis", 13)
+        make("chat_system", 10, slant="italic")
+        make("chat_time", 10)
+        make("plan", 11)
+        make("mono_lg", 12)
+        make("mono_popup", 12, "bold")
+
     def _center_window(self):
         self.root.update_idletasks()
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
-        w, h = 1100, 740
+        w, h = BASE_WIDTH, BASE_HEIGHT
         self.root.geometry(f"{w}x{h}+{(sw-w)//2}+{(sh-h)//2}")
 
     def _apply_style(self):
-        style = ttk.Style()
-        style.theme_use("clam")
-        style.configure(".", background=BG0, foreground=TEXT1,
-                        font=FONT_MONO, borderwidth=0)
-        style.configure("TNotebook", background=BG1, borderwidth=0,
-                        tabmargins=[0, 0, 0, 0])
-        style.configure("TNotebook.Tab", background=BG2, foreground=TEXT2,
-                        font=FONT_MONO_SM, padding=[14, 6],
-                        borderwidth=0, relief="flat")
-        style.map("TNotebook.Tab",
-                  background=[("selected", BG1)],
-                  foreground=[("selected", CYAN)])
-        style.configure("TSeparator", background=BORDER)
+        self._style = ttk.Style()
+        self._style.theme_use("clam")
+        self._style.configure(".", background=BG0, foreground=TEXT1,
+                              font=self._fonts["body"], borderwidth=0)
+        self._style.configure("Jarvis.TNotebook", background=BG1, borderwidth=0,
+                              tabmargins=[0, 0, 0, 0])
+        self._style.configure("Jarvis.TNotebook.Tab", background=BG2, foreground=TEXT2,
+                              font=self._fonts["tab"], padding=[18, 8],
+                              borderwidth=0, relief="flat")
+        self._style.map("Jarvis.TNotebook.Tab",
+                        background=[("selected", BG1)],
+                        foreground=[("selected", CYAN)])
+        self._style.configure("TSeparator", background=BORDER)
+
+    def _handle_resize(self, event=None):
+        if event and event.widget is not self.root:
+            return
+        if self._resize_job:
+            self.root.after_cancel(self._resize_job)
+        self._resize_job = self.root.after(80, self._apply_responsive_scale)
+
+    def _apply_responsive_scale(self):
+        self._resize_job = None
+        width = max(self.root.winfo_width(), BASE_WIDTH)
+        height = max(self.root.winfo_height(), BASE_HEIGHT)
+        scale = min(1.9, max(1.0, min(width / BASE_WIDTH, height / BASE_HEIGHT)))
+        if self._is_fullscreen:
+            scale = max(scale, 1.45)
+        if abs(scale - self._font_scale) < 0.03:
+            self._refresh_display_state()
+            return
+
+        self._font_scale = scale
+        for name, spec in self._font_specs.items():
+            self._fonts[name].configure(
+                size=max(spec["size"], round(spec["size"] * scale)),
+                weight=spec["weight"],
+                slant=spec["slant"],
+            )
+
+        self._style.configure(
+            "Jarvis.TNotebook.Tab",
+            font=self._fonts["tab"],
+            padding=[int(18 * scale), int(8 * scale)],
+        )
+
+        if hasattr(self, "_header_frame"):
+            self._header_frame.configure(height=max(68, int(74 * scale)))
+        if hasattr(self, "_sidebar"):
+            self._sidebar.configure(width=max(SIDEBAR_BASE_WIDTH, int(SIDEBAR_BASE_WIDTH * scale)))
+        if hasattr(self, "_hud"):
+            self._hud.resize(max(HUD_BASE_SIZE, int(HUD_BASE_SIZE * scale)))
+        if hasattr(self, "_cpu_bar"):
+            metric_width = max(110, int(120 * scale))
+            for bar in (self._cpu_bar, self._ram_bar, self._disk_bar):
+                bar.resize(metric_width)
+                bar.update_fonts(self._fonts["body_sm"], self._fonts["body_sm"])
+        if hasattr(self, "_wake_hint"):
+            self._wake_hint.configure(wraplength=max(220, int(self._sidebar.winfo_width() - 36)))
+        if hasattr(self, "_voice_hint_label"):
+            self._voice_hint_label.configure(wraplength=max(420, width - 420))
+        if hasattr(self, "_chat_text"):
+            pad_x = int(16 * scale)
+            pad_y = int(12 * scale)
+            self._chat_text.configure(padx=pad_x, pady=pad_y, spacing3=max(6, int(8 * scale)))
+            self._term_text.configure(padx=pad_x, pady=max(10, int(10 * scale)))
+            self._sys_text.configure(padx=pad_x, pady=max(10, int(10 * scale)))
+            self._mem_text.configure(padx=pad_x, pady=max(10, int(10 * scale)))
+
+        self._refresh_display_state()
+
+    def _refresh_display_state(self):
+        if hasattr(self, "_display_hint_var"):
+            self._display_hint_var.set("WINDOWED [ESC]" if self._is_fullscreen else "FULLSCREEN [F11]")
+        if hasattr(self, "_display_mode_var"):
+            if self._is_fullscreen:
+                self._display_mode_var.set("IMMERSIVE HUD")
+            elif self._font_scale >= 1.2:
+                self._display_mode_var.set("EXPANDED CONSOLE")
+            else:
+                self._display_mode_var.set("ADAPTIVE CONSOLE")
+
+    def _toggle_fullscreen(self, event=None):
+        self._is_fullscreen = not self._is_fullscreen
+        self.root.attributes("-fullscreen", self._is_fullscreen)
+        self._apply_responsive_scale()
+        return "break"
+
+    def _exit_fullscreen(self, event=None):
+        if self._is_fullscreen:
+            self._is_fullscreen = False
+            self.root.attributes("-fullscreen", False)
+            self._apply_responsive_scale()
+        return "break"
 
     # ── Main UI ─────────────────────────────────────────────
     def _build_ui(self):
         # ── Header ──
         self._build_header()
         tk.Frame(self.root, bg=CYAN, height=1).pack(fill="x")
+        tk.Frame(self.root, bg="#092845", height=1).pack(fill="x")
 
         # ── Body ──
         body = tk.Frame(self.root, bg=BG0)
-        body.pack(fill="both", expand=True, padx=8, pady=8)
+        body.pack(fill="both", expand=True, padx=10, pady=10)
         body.columnconfigure(1, weight=1)
         body.rowconfigure(0, weight=1)
 
@@ -332,43 +511,68 @@ class JarvisGUI:
 
     # ── Header ──────────────────────────────────────────────
     def _build_header(self):
-        hdr = tk.Frame(self.root, bg=BG1, height=56)
+        hdr = tk.Frame(self.root, bg=BG1, height=74)
+        self._header_frame = hdr
         hdr.pack(fill="x")
         hdr.pack_propagate(False)
 
         # Left: Logo
         logo_f = tk.Frame(hdr, bg=BG1)
         logo_f.pack(side="left", padx=16)
-        tk.Label(logo_f, text="⬡", font=("Courier New", 22, "bold"),
+        tk.Label(logo_f, text="⬡", font=self._fonts["title"],
                  fg=CYAN, bg=BG1).pack(side="left")
-        tk.Label(logo_f, text=" J.A.R.V.I.S", font=FONT_TITLE,
+        tk.Label(logo_f, text=" J.A.R.V.I.S", font=self._fonts["title"],
                  fg=CYAN, bg=BG1).pack(side="left")
         tk.Label(logo_f, text="  /  ADVANCED AI SYSTEM",
-                 font=FONT_MONO_SM, fg=TEXT2, bg=BG1).pack(side="left")
+                 font=self._fonts["subtitle"], fg=TEXT2, bg=BG1).pack(side="left")
 
         # Right: clock + status
         right_f = tk.Frame(hdr, bg=BG1)
         right_f.pack(side="right", padx=16)
 
+        self._display_hint_var = tk.StringVar(value="FULLSCREEN [F11]")
+        self._fullscreen_btn = tk.Button(
+            right_f,
+            textvariable=self._display_hint_var,
+            bg=BG2,
+            fg=TEXT1,
+            activebackground=CYAN,
+            activeforeground=BG0,
+            relief="flat",
+            cursor="hand2",
+            borderwidth=0,
+            font=self._fonts["button"],
+            padx=12,
+            pady=6,
+            command=self._toggle_fullscreen,
+        )
+        self._fullscreen_btn.pack(side="right")
+
         self._status_var = tk.StringVar(value=STATUS_LABEL["sleeping"])
         self._status_lbl = tk.Label(right_f, textvariable=self._status_var,
-                                    font=("Courier New", 10, "bold"),
+                                    font=self._fonts["status"],
                                     fg=STATUS_COLOR["sleeping"], bg=BG1)
         self._status_lbl.pack(side="right", padx=(16, 0))
 
         self._clock_var = tk.StringVar()
-        tk.Label(right_f, textvariable=self._clock_var,
-                 font=("Courier New", 14), fg=TEXT2, bg=BG1).pack(side="right")
+        self._clock_lbl = tk.Label(right_f, textvariable=self._clock_var,
+                                   font=self._fonts["clock"], fg=TEXT2, bg=BG1)
+        self._clock_lbl.pack(side="right", padx=(0, 12))
 
     # ── Sidebar ─────────────────────────────────────────────
     def _build_sidebar(self, parent):
-        side = tk.Frame(parent, bg=BG1, width=240)
+        side = tk.Frame(parent, bg=BG1, width=SIDEBAR_BASE_WIDTH,
+                        highlightthickness=1, highlightbackground=BORDER)
+        self._sidebar = side
         side.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
         side.grid_propagate(False)
         side.columnconfigure(0, weight=1)
 
+        tk.Label(side, text="TACTICAL OVERVIEW",
+                 font=self._fonts["section"], fg=CYAN, bg=BG1).pack(anchor="w", padx=14, pady=(12, 4))
+
         # HUD Canvas
-        self._hud = HUDCanvas(side)
+        self._hud = HUDCanvas(side, size=HUD_BASE_SIZE)
         self._hud.pack(pady=(12, 4), padx=10)
 
         # Waveform
@@ -378,22 +582,31 @@ class JarvisGUI:
         # Status text under HUD
         self._mode_var = tk.StringVar(value="STANDBY MODE")
         tk.Label(side, textvariable=self._mode_var,
-                 font=FONT_MONO_SM, fg=TEXT2, bg=BG1).pack()
+                 font=self._fonts["body_sm"], fg=TEXT2, bg=BG1).pack()
 
         # Separator
         tk.Frame(side, bg=BORDER, height=1).pack(fill="x", padx=10, pady=8)
 
         # System metrics
         tk.Label(side, text="SYSTEM METRICS",
-                 font=FONT_MONO_SM, fg=TEXT2, bg=BG1).pack(anchor="w", padx=12)
+                 font=self._fonts["section"], fg=TEXT2, bg=BG1).pack(anchor="w", padx=12)
 
         metrics_f = tk.Frame(side, bg=BG1)
         metrics_f.pack(fill="x", padx=10, pady=4)
-        self._cpu_bar  = MetricBar(metrics_f, "CPU", CYAN)
+        self._cpu_bar  = MetricBar(metrics_f, "CPU", CYAN,
+                                   label_font=self._fonts["body_sm"],
+                                   value_font=self._fonts["body_sm"],
+                                   bar_width=120)
         self._cpu_bar.pack(fill="x", pady=2)
-        self._ram_bar  = MetricBar(metrics_f, "RAM", GREEN)
+        self._ram_bar  = MetricBar(metrics_f, "RAM", GREEN,
+                                   label_font=self._fonts["body_sm"],
+                                   value_font=self._fonts["body_sm"],
+                                   bar_width=120)
         self._ram_bar.pack(fill="x", pady=2)
-        self._disk_bar = MetricBar(metrics_f, "DSK", AMBER)
+        self._disk_bar = MetricBar(metrics_f, "DSK", AMBER,
+                                   label_font=self._fonts["body_sm"],
+                                   value_font=self._fonts["body_sm"],
+                                   bar_width=120)
         self._disk_bar.pack(fill="x", pady=2)
 
         # Separator
@@ -404,14 +617,15 @@ class JarvisGUI:
 
         # Wake word hint
         tk.Frame(side, bg=BORDER, height=1).pack(fill="x", padx=10, pady=8)
-        tk.Label(side, text=f'Wake: "{WAKE_WORD.title()}"',
-                 font=FONT_MONO_SM, fg=TEXT2, bg=BG1,
-                 wraplength=200).pack(pady=2)
+        self._wake_hint = tk.Label(side, text=f'Wake: "{WAKE_WORD.title()}"',
+                                   font=self._fonts["body_sm"], fg=TEXT2, bg=BG1,
+                                   wraplength=220, justify="left")
+        self._wake_hint.pack(pady=2, padx=12, anchor="w")
 
     def _build_sidebar_buttons(self, parent):
         btn_cfg = dict(
-            font=("Courier New", 9, "bold"), relief="flat",
-            cursor="hand2", pady=5, borderwidth=0
+            font=self._fonts["button"], relief="flat",
+            cursor="hand2", pady=6, borderwidth=0
         )
         def btn(p, text, bg, fg, cmd):
             b = tk.Button(p, text=text, bg=bg, fg=fg,
@@ -428,7 +642,7 @@ class JarvisGUI:
         # Quick actions
         tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", padx=10, pady=6)
         tk.Label(parent, text="QUICK COMMANDS",
-                 font=FONT_MONO_SM, fg=TEXT2, bg=BG1).pack(anchor="w", padx=12)
+                 font=self._fonts["section"], fg=TEXT2, bg=BG1).pack(anchor="w", padx=12)
         quick = [
             ("⏰ Time", "what time is it"),
             ("🔋 Battery", "battery status"),
@@ -440,8 +654,8 @@ class JarvisGUI:
         for label, cmd in quick:
             tk.Button(parent, text=label, bg=BG2, fg=TEXT1,
                       activebackground=BLUE, activeforeground=TEXT1,
-                      relief="flat", cursor="hand2", pady=3,
-                      font=FONT_MONO_SM, borderwidth=0,
+                      relief="flat", cursor="hand2", pady=4,
+                      font=self._fonts["body_sm"], borderwidth=0,
                       command=lambda c=cmd: self._quick_cmd(c)
                      ).pack(fill="x", padx=10, pady=1)
 
@@ -450,10 +664,22 @@ class JarvisGUI:
         main = tk.Frame(parent, bg=BG0)
         main.grid(row=0, column=1, sticky="nsew")
         main.columnconfigure(0, weight=1)
-        main.rowconfigure(0, weight=1)
+        main.rowconfigure(1, weight=1)
+
+        self._build_signal_rail(main)
+
+        deck = tk.Frame(main, bg=BORDER, padx=1, pady=1)
+        deck.grid(row=1, column=0, sticky="nsew")
+        deck.columnconfigure(0, weight=1)
+        deck.rowconfigure(0, weight=1)
+
+        console = tk.Frame(deck, bg=BG1)
+        console.grid(row=0, column=0, sticky="nsew")
+        console.columnconfigure(0, weight=1)
+        console.rowconfigure(0, weight=1)
 
         # Notebook tabs
-        self._nb = ttk.Notebook(main)
+        self._nb = ttk.Notebook(console, style="Jarvis.TNotebook")
         self._nb.grid(row=0, column=0, sticky="nsew")
 
         self._build_chat_tab()
@@ -462,7 +688,36 @@ class JarvisGUI:
         self._build_memory_tab()
 
         # Input bar
-        self._build_input_bar(main)
+        self._build_input_bar(console)
+
+    def _build_signal_rail(self, parent):
+        rail = tk.Frame(parent, bg=BG0)
+        rail.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        for col in range(4):
+            rail.columnconfigure(col, weight=1)
+
+        self._display_mode_var = tk.StringVar(value="ADAPTIVE CONSOLE")
+        self._operator_state_var = tk.StringVar(value="OPERATOR MODE" if OPERATOR_MODE else "SAFE MODE")
+        self._command_state_var = tk.StringVar(value="STANDBY MODE")
+        self._wake_word_var = tk.StringVar(value=WAKE_WORD.upper())
+
+        cards = [
+            ("DISPLAY", self._display_mode_var, CYAN),
+            ("CONTROL", self._operator_state_var, BLUE),
+            ("STATUS", self._command_state_var, GREEN),
+            ("WAKE WORD", self._wake_word_var, AMBER),
+        ]
+        for col, (label, value_var, accent) in enumerate(cards):
+            self._make_signal_card(rail, col, label, value_var, accent)
+
+    def _make_signal_card(self, parent, column, label, value_var, accent):
+        card = tk.Frame(parent, bg=BG1, highlightthickness=1, highlightbackground=BORDER)
+        card.grid(row=0, column=column, sticky="ew", padx=(0 if column == 0 else 4, 0))
+        tk.Frame(card, bg=accent, height=2).pack(fill="x")
+        inner = tk.Frame(card, bg=BG1)
+        inner.pack(fill="both", expand=True, padx=12, pady=10)
+        tk.Label(inner, text=label, font=self._fonts["section"], fg=TEXT2, bg=BG1).pack(anchor="w")
+        tk.Label(inner, textvariable=value_var, font=self._fonts["body_lg"], fg=TEXT1, bg=BG1).pack(anchor="w")
 
     # ── Chat tab ────────────────────────────────────────────
     def _build_chat_tab(self):
@@ -473,7 +728,7 @@ class JarvisGUI:
 
         self._chat_text = tk.Text(
             f, bg=BG1, fg=TEXT1, insertbackground=CYAN,
-            font=FONT_MONO_LG, relief="flat", padx=14, pady=10,
+            font=self._fonts["body_lg"], relief="flat", padx=14, pady=10,
             wrap="word", state="disabled", spacing3=6,
             selectbackground=BLUE, selectforeground=TEXT1
         )
@@ -484,17 +739,17 @@ class JarvisGUI:
         sb.grid(row=0, column=1, sticky="ns")
 
         self._chat_text.tag_configure("user",
-            foreground=BLUE, font=("Courier New", 11, "bold"))
+            foreground=BLUE, font=self._fonts["chat_user"])
         self._chat_text.tag_configure("jarvis",
-            foreground=CYAN, font=("Courier New", 11))
+            foreground=CYAN, font=self._fonts["chat_jarvis"])
         self._chat_text.tag_configure("system",
-            foreground=TEXT2, font=("Courier New", 9, "italic"))
+            foreground=TEXT2, font=self._fonts["chat_system"])
         self._chat_text.tag_configure("time",
-            foreground="#1a2a3a", font=("Courier New", 9))
+            foreground="#1a2a3a", font=self._fonts["chat_time"])
         self._chat_text.tag_configure("plan",
-            foreground=AMBER, font=("Courier New", 10))
+            foreground=AMBER, font=self._fonts["plan"])
 
-        self._chat_append_system(f"System online. Say '{WAKE_WORD.title()}' or type below.")
+        self._chat_append_system(f"System online. Say '{WAKE_WORD.title()}' or press F11 for immersive view.")
 
     # ── Terminal tab ─────────────────────────────────────────
     def _build_terminal_tab(self):
@@ -506,7 +761,7 @@ class JarvisGUI:
         # Output area
         self._term_text = tk.Text(
             f, bg="#020408", fg="#00ff66", insertbackground=GREEN,
-            font=("Courier New", 11), relief="flat", padx=12, pady=8,
+            font=self._fonts["mono_lg"], relief="flat", padx=12, pady=8,
             wrap="word", state="disabled",
             selectbackground="#003320", selectforeground="#00ff66"
         )
@@ -527,14 +782,14 @@ class JarvisGUI:
         term_in.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(2, 0))
         term_in.columnconfigure(1, weight=1)
 
-        tk.Label(term_in, text="JARVIS $", font=("Courier New", 11, "bold"),
+        tk.Label(term_in, text="JARVIS $", font=self._fonts["button"],
                  fg=GREEN, bg="#030608").grid(row=0, column=0, padx=8)
 
         self._term_input_var = tk.StringVar()
         self._term_entry = tk.Entry(
             term_in, textvariable=self._term_input_var,
             bg="#030608", fg=GREEN, insertbackground=GREEN,
-            font=("Courier New", 11), relief="flat", highlightthickness=0
+            font=self._fonts["mono_lg"], relief="flat", highlightthickness=0
         )
         self._term_entry.grid(row=0, column=1, sticky="ew", pady=6)
         self._term_entry.bind("<Return>", self._on_term_submit)
@@ -551,18 +806,18 @@ class JarvisGUI:
 
         self._sys_text = tk.Text(
             f, bg=BG1, fg=TEXT1, insertbackground=CYAN,
-            font=FONT_MONO, relief="flat", padx=12, pady=8,
+            font=self._fonts["body"], relief="flat", padx=12, pady=8,
             wrap="word", state="disabled"
         )
         self._sys_text.grid(row=0, column=0, sticky="nsew")
         self._sys_text.tag_configure("header", foreground=CYAN,
-                                     font=("Courier New", 10, "bold"))
+                                     font=self._fonts["section"])
         self._sys_text.tag_configure("val",    foreground=TEXT1)
         self._sys_text.tag_configure("warn",   foreground=AMBER)
         self._sys_text.tag_configure("good",   foreground=GREEN)
 
         tk.Button(f, text="↻  REFRESH", bg=BLUE, fg=TEXT1, relief="flat",
-                  font=FONT_MONO_SM, cursor="hand2",
+                  font=self._fonts["button"], cursor="hand2",
                   command=self._refresh_system_tab
                  ).grid(row=1, column=0, pady=4)
         self._refresh_system_tab()
@@ -626,18 +881,18 @@ class JarvisGUI:
 
         self._mem_text = tk.Text(
             f, bg=BG1, fg=TEXT1, insertbackground=CYAN,
-            font=FONT_MONO, relief="flat", padx=12, pady=8,
+            font=self._fonts["body"], relief="flat", padx=12, pady=8,
             wrap="word", state="disabled"
         )
         self._mem_text.grid(row=0, column=0, sticky="nsew")
         self._mem_text.tag_configure("header", foreground=CYAN,
-                                     font=("Courier New", 10, "bold"))
+                                     font=self._fonts["section"])
         self._mem_text.tag_configure("item",   foreground=TEXT1)
         self._mem_text.tag_configure("meta",   foreground=TEXT2,
-                                     font=("Courier New", 9))
+                                     font=self._fonts["body_sm"])
 
         tk.Button(f, text="↻  REFRESH MEMORY", bg=BLUE, fg=TEXT1,
-                  relief="flat", font=FONT_MONO_SM, cursor="hand2",
+                  relief="flat", font=self._fonts["button"], cursor="hand2",
                   command=self.refresh_memory_tab
                  ).grid(row=1, column=0, pady=4)
 
@@ -702,14 +957,14 @@ class JarvisGUI:
         bar.grid(row=1, column=0, sticky="ew", pady=(6, 0))
         bar.columnconfigure(1, weight=1)
 
-        tk.Label(bar, text=">", font=("Courier New", 13, "bold"),
+        tk.Label(bar, text=">", font=self._fonts["input"],
                  fg=CYAN, bg=BG2).grid(row=0, column=0, padx=(12, 4), pady=10)
 
         self._input_var = tk.StringVar()
         self._entry = tk.Entry(
             bar, textvariable=self._input_var,
             bg=BG2, fg=TEXT1, insertbackground=CYAN,
-            font=FONT_MONO_LG, relief="flat", highlightthickness=0
+            font=self._fonts["input"], relief="flat", highlightthickness=0
         )
         self._entry.grid(row=0, column=1, sticky="ew", pady=10)
         self._entry.bind("<Return>", self._on_submit)
@@ -717,15 +972,17 @@ class JarvisGUI:
 
         tk.Button(bar, text="SEND  →", bg=BLUE, fg=TEXT1,
                   activebackground=CYAN, activeforeground=BG0,
-                  font=("Courier New", 10, "bold"), relief="flat",
+                  font=self._fonts["button"], relief="flat",
                   cursor="hand2", padx=14, pady=8,
                   command=self._on_submit
                  ).grid(row=0, column=2, padx=(0, 8))
 
-        tk.Label(bar,
-                 text=f'Type or say "{WAKE_WORD.title()}" to activate voice mode',
-                 font=FONT_MONO_SM, fg=TEXT2, bg=BG2
-                ).grid(row=1, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 6))
+        self._voice_hint_label = tk.Label(
+            bar,
+            text=f'Type a command or say "{WAKE_WORD.title()}". Press F11 for immersive view.',
+            font=self._fonts["body_sm"], fg=TEXT2, bg=BG2
+        )
+        self._voice_hint_label.grid(row=1, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 6))
 
     # ── Chat helpers ─────────────────────────────────────────
     def add_user_message(self, text: str):
@@ -802,6 +1059,8 @@ class JarvisGUI:
             self._status_var.set(label)
             self._status_lbl.configure(fg=color)
             self._mode_var.set(mode_map.get(status, status.upper()))
+            if hasattr(self, "_command_state_var"):
+                self._command_state_var.set(mode_map.get(status, status.upper()))
             self._hud.set_status(status)
             self._wave.set_active(status == "speaking")
 
@@ -816,12 +1075,12 @@ class JarvisGUI:
             pop.geometry("340x130")
             pop.attributes("-topmost", True)
             pop.resizable(False, False)
-            tk.Label(pop, text=f"  {title}", font=("Courier New", 12, "bold"),
+            tk.Label(pop, text=f"  {title}", font=self._fonts["mono_popup"],
                      fg=AMBER, bg=BG2, anchor="w").pack(fill="x", pady=(16, 4), padx=16)
-            tk.Label(pop, text=message, font=FONT_MONO,
+            tk.Label(pop, text=message, font=self._fonts["body"],
                      fg=TEXT1, bg=BG2, wraplength=300, justify="left").pack(pady=4, padx=16)
             tk.Button(pop, text="  DISMISS  ", bg=BLUE, fg=TEXT1,
-                      font=FONT_MONO_SM, relief="flat", cursor="hand2",
+                      font=self._fonts["button"], relief="flat", cursor="hand2",
                       command=pop.destroy).pack(pady=8)
             pop.after(8000, pop.destroy)
         self.root.after(0, _show)
@@ -832,7 +1091,6 @@ class JarvisGUI:
             now = datetime.datetime.now()
             self._clock_var.set(now.strftime("%H:%M:%S"))
             self.root.after(1000, _tick)
-        self._clock_var = tk.StringVar()
         _tick()
 
     # ── System monitor (live metrics) ─────────────────────────
