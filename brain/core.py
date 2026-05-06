@@ -655,7 +655,7 @@ class Brain:
             if stripped.lower() in pronouns or not stripped:
                 p["contact"] = self._last_whatsapp_contact
             else:
-                p["contact"] = self._clean_contact_name(stripped)
+                p["contact"] = self._resolve_whatsapp_contact_name(stripped) or self._clean_contact_name(stripped)
 
         elif intent == "add_whatsapp_contact":
             match = re.search(
@@ -992,6 +992,7 @@ class Brain:
                 contact = params.get("contact", "")
                 phone = params.get("phone", "")
                 if wa and contact and phone:
+                    self._last_whatsapp_contact = contact
                     return wa.add_contact(contact, phone)
                 return f"Tell me the contact name and phone number, {USER_NAME}."
             if intent == "list_whatsapp_contacts":
