@@ -55,6 +55,44 @@ class WhatsAppController:
                 candidates.append(clean)
         return candidates
 
+    @staticmethod
+    def _normalize_label(text: str) -> str:
+        cleaned = "".join(ch.lower() if ch.isalnum() or ch.isspace() else " " for ch in (text or ""))
+        return " ".join(cleaned.split())
+
+    def _title_matches_contact(self, title: str, contact: str) -> bool:
+        title_norm = self._normalize_label(title)
+        contact_norm = self._normalize_label(contact)
+        if not title_norm or not contact_norm:
+            return False
+        if title_norm == contact_norm or contact_norm in title_norm:
+            return True
+
+        contact_tokens = [token for token in contact_norm.split() if len(token) > 2]
+        if not contact_tokens:
+            return False
+        matches = sum(1 for token in contact_tokens if token in title_norm)
+        return matches >= max(1, len(contact_tokens) - 1)
+
+    def _contact_search_queries(self, contact: str, phone: str = "") -> list[str]:
+        queries = []
+        normalized = " ".join((contact or "").split())
+        if normalized:
+            queries.append(normalized)
+            parts = normalized.split()
+            if len(parts) > 1:
+                queries.append(" ".join(parts[:2]))
+            if parts:
+                queries.append(parts[0])
+        queries.extend(self._phone_candidates(phone))
+
+        deduped = []
+        for item in queries:
+            clean = item.strip()
+            if clean and clean not in deduped:
+                deduped.append(clean)
+        return deduped
+
     def send_message(self, contact: str, message: str) -> str:
         if not contact or not message:
             return f"Please provide both a contact name and a message, {USER_NAME}."
@@ -243,7 +281,10 @@ class WhatsAppController:
         if phone and self._open_desktop_link(phone):
             if self._focus_whatsapp_window(wait_seconds=12):
                 time.sleep(3.0)
-                return True
+                if self._current_chat_matches(contact):
+                    log.info(f"WhatsApp deep link confirmed chat for {contact}")
+                    return True
+                log.warning(f"WhatsApp deep link did not land on {contact}; falling back to search")
             log.warning("Saved-contact deep link opened but WhatsApp could not be focused")
 
         if not self._open_desktop_app():
@@ -251,14 +292,19 @@ class WhatsAppController:
         if not self._focus_whatsapp_window(wait_seconds=12):
             return False
 
-        return self._open_chat_via_search(contact)
+        return self._open_chat_via_search(contact, phone=phone)
 
     def _chat_search_point(self, win) -> tuple[int, int]:
         x = win.left + int(win.width * 0.23)
         y = win.top + int(win.height * 0.18)
         return x, y
 
-    def _open_chat_via_search(self, contact: str) -> bool:
+    def _first_search_result_point(self, win) -> tuple[int, int]:
+        x = win.left + int(win.width * 0.21)
+        y = win.top + int(win.height * 0.36)
+        return x, y
+
+    def _open_chat_via_search(self, contact: str, phone: str = "") -> bool:
         import pyautogui
         import pyperclip
 
@@ -267,22 +313,124 @@ class WhatsAppController:
             return False
 
         try:
+            queries = self._contact_search_queries(contact, phone=phone)
+            if not queries:
+                return False
+
             search_x, search_y = self._chat_search_point(win)
-            pyautogui.press("esc")
-            time.sleep(0.2)
-            pyautogui.click(search_x, search_y)
-            time.sleep(0.3)
-            pyautogui.hotkey("ctrl", "a")
-            pyperclip.copy(contact)
-            pyautogui.hotkey("ctrl", "v")
-            time.sleep(1.5)
-            pyautogui.press("enter")
-            time.sleep(1.5)
-            log.info(f"Opened WhatsApp chat via search for {contact}")
-            return True
+            result_x, result_y = self._first_search_result_point(win)
+            for query in queries:
+                pyautogui.press("esc")
+                time.sleep(0.15)
+                pyautogui.click(search_x, search_y)
+                time.sleep(0.25)
+                pyautogui.hotkey("ctrl", "a")
+                time.sleep(0.1)
+                pyautogui.press("backspace")
+                time.sleep(0.1)
+                pyautogui.write(query, interval=0.04)
+                time.sleep(0.9)
+                pyautogui.press("down")
+                time.sleep(0.15)
+                pyautogui.press("enter")
+                time.sleep(1.0)
+                if self._current_chat_matches(contact):
+                    log.info(f"Opened WhatsApp chat via keyboard search for {contact} using query '{query}'")
+                    return True
+                if self._header_has_call_controls():
+                    log.info(f"Assuming WhatsApp chat is open for {contact} after keyboard search '{query}'")
+                    return True
+
+                # Fallback to clipboard paste for cases where direct typing is blocked.
+                pyautogui.click(search_x, search_y)
+                time.sleep(0.2)
+                pyautogui.hotkey("ctrl", "a")
+                pyautogui.press("backspace")
+                pyperclip.copy(query)
+                pyautogui.hotkey("ctrl", "v")
+                time.sleep(0.9)
+                pyautogui.click(result_x, result_y)
+                time.sleep(1.0)
+                if self._current_chat_matches(contact):
+                    log.info(f"Opened WhatsApp chat via paste search for {contact} using query '{query}'")
+                    return True
+                if self._header_has_call_controls():
+                    log.info(f"Assuming WhatsApp chat is open for {contact} after result click for '{query}'")
+                    return True
+
+            log.warning(f"WhatsApp search could not confirm the chat for {contact}")
+            return False
         except Exception as e:
             log.warning(f"Could not open chat for {contact}: {e}")
             return False
+
+    def _read_current_chat_title(self) -> str:
+        desktop = self._pywinauto_desktop()
+        win = self._get_whatsapp_window() or self._get_active_window()
+        if not desktop or not win:
+            return ""
+
+        anchor_x = win.left + int(win.width * 0.56)
+        anchor_y = win.top + min(118, max(84, int(win.height * 0.09)))
+
+        try:
+            root = desktop.from_point(anchor_x, anchor_y)
+        except Exception:
+            return ""
+
+        try:
+            current = root
+            best = root
+            for _ in range(8):
+                parent = current.parent()
+                if not parent:
+                    break
+                rect = parent.rectangle()
+                width = rect.right - rect.left
+                height = rect.bottom - rect.top
+                if width > max(win.width * 1.35, win.width + 260):
+                    break
+                if height > max(win.height * 1.35, win.height + 260):
+                    break
+                best = parent
+                current = parent
+
+            header_top = win.top + 35
+            header_bottom = win.top + min(160, max(96, int(win.height * 0.15)))
+            title_candidates = []
+            for item in best.descendants():
+                control_type = getattr(item.element_info, "control_type", "")
+                if control_type != "Text":
+                    continue
+                rect = item.rectangle()
+                center_y = (rect.top + rect.bottom) // 2
+                center_x = (rect.left + rect.right) // 2
+                if center_x < win.left + int(win.width * 0.44):
+                    continue
+                if center_y < header_top or center_y > header_bottom:
+                    continue
+                text = (item.window_text() or getattr(item.element_info, "name", "") or "").strip()
+                if not text:
+                    continue
+                title_candidates.append((rect.top, len(text), text))
+
+            if not title_candidates:
+                return ""
+
+            title_candidates.sort(key=lambda row: (row[0], -row[1]))
+            for _, _, text in title_candidates:
+                if "message yourself" in text.lower():
+                    continue
+                return text
+        except Exception:
+            return ""
+        return ""
+
+    def _current_chat_matches(self, contact: str) -> bool:
+        title = self._read_current_chat_title()
+        if title:
+            log.info("WhatsApp current chat title: %s", title)
+        return self._title_matches_contact(title, contact)
 
     def _get_whatsapp_window(self):
         wins = self._list_whatsapp_windows()
@@ -391,6 +539,43 @@ class WhatsAppController:
         menu_x = win.left + int(win.width * 0.858)
         return (main_x, y), (menu_x, y)
 
+    def _header_has_call_controls(self) -> bool:
+        win = self._get_whatsapp_window() or self._get_active_window()
+        if not win:
+            return False
+        title = self._read_current_chat_title()
+        if title and "message yourself" in title.lower():
+            return False
+        return win.width > 1100
+
+    def _start_call_from_header(self, video: bool = False) -> bool:
+        try:
+            import pyautogui
+        except Exception:
+            return False
+
+        win = self._get_whatsapp_window() or self._get_active_window()
+        if not win:
+            return False
+
+        main_point, menu_point = self._header_call_points(win)
+        try:
+            if video:
+                pyautogui.click(*main_point)
+                time.sleep(0.4)
+                log.info("Used primary WhatsApp header button for video call")
+                return True
+
+            pyautogui.click(*menu_point)
+            time.sleep(0.3)
+            pyautogui.press("enter")
+            time.sleep(0.3)
+            log.info("Used WhatsApp header menu for voice call")
+            return True
+        except Exception as e:
+            log.warning(f"Could not use the WhatsApp header call control: {e}")
+            return False
+
     def _open_chat_for_call(self, contact: str, phone: str, video: bool) -> None:
         import pyautogui
 
@@ -405,6 +590,9 @@ class WhatsAppController:
             time.sleep(0.2)
         except Exception:
             pass
+        if self._start_call_from_header(video=video):
+            log.info(f"Activated {'video ' if video else ''}call from header controls for {contact}")
+            return
         if self._click_call_button(video=video):
             log.info(f"Activated {'video ' if video else ''}call button for {contact} via UI automation")
             return

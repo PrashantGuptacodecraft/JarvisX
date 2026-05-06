@@ -185,6 +185,8 @@ class Brain:
         if follow_up is not None:
             return follow_up
 
+        self._learn_from_user_text(text)
+
         contact_only = self._resolve_whatsapp_contact_name(text)
         if contact_only and len(text_lower.split()) <= 4 and not any(token in text_lower for token in ("open", "call", "play", "search", "send", "message", "text", "whatsapp")):
             self._pending_whatsapp_contact = contact_only
@@ -269,6 +271,10 @@ class Brain:
             return "list_knowledge_files", self._extract_params("list_knowledge_files", low, original)
         if self._looks_like_brain_status(low):
             return "brain_status", self._extract_params("brain_status", low, original)
+        if self._looks_like_recent_file_open_request(low):
+            return "open_recent_file", self._extract_params("open_recent_file", low, original)
+        if self._looks_like_document_creation_request(low):
+            return "create_file", self._extract_params("create_file", low, original)
         if self._looks_like_folder_open(low):
             return "open_folder", self._extract_params("open_folder", low, original)
         if any(kw in low for kw in INTENTS["search_youtube"]):
@@ -341,6 +347,82 @@ class Brain:
         if not re.search(r"\bdownload\b", low):
             return False
         return not any(word in low for word in ["shutdown", "upload", "speed test"])
+
+    def _looks_like_recent_file_open_request(self, low: str) -> bool:
+        if "open" not in low:
+            return False
+        phrases = [
+            "open it",
+            "open that",
+            "open the file",
+            "the file you created",
+            "the file you create",
+            "open recent file",
+            "last file",
+        ]
+        if any(phrase in low for phrase in phrases):
+            return True
+        if "resume" in low and ("open" in low or "created" in low):
+            return True
+        return low.startswith("the file ") and "open" in low
+
+    def _looks_like_document_creation_request(self, low: str) -> bool:
+        if any(
+            word in low
+            for word in [
+                "email",
+                "mail",
+                "gmail",
+                "script",
+                "code",
+                "python",
+                "terminal",
+                "command",
+                "todo",
+                "to-do",
+                "note that",
+                "whatsapp",
+            ]
+        ):
+            return False
+
+        create_signals = ["create", "make", "write", "draft", "prepare", "generate"]
+        document_signals = [
+            "word file",
+            "word document",
+            "docx",
+            "document",
+            "essay",
+            "report",
+            "letter",
+            "resume",
+            "cv",
+            "curriculum vitae",
+            "biodata",
+            "bio data",
+        ]
+
+        if any(signal in low for signal in document_signals) and any(signal in low for signal in create_signals):
+            return True
+
+        if "essay" in low and re.search(r"\b\d+\s*words?\b", low):
+            return True
+
+        if len(low.split()) <= 4 and any(signal in low for signal in ("resume", "cv", "biodata", "bio data")):
+            return True
+
+        return False
+
+    def _learn_from_user_text(self, text: str):
+        memory = self.tools.get("memory")
+        if not memory or not hasattr(memory, "learn_profile_from_text"):
+            return
+        try:
+            learned = memory.learn_profile_from_text(text)
+            if learned:
+                log.info("Learned profile details from conversation: %s", " | ".join(learned))
+        except Exception as exc:
+            log.warning(f"Profile auto-learn skipped: {exc}")
 
     def _looks_like_profile_save(self, low: str) -> bool:
         return bool(
@@ -785,6 +867,9 @@ class Brain:
         elif intent == "brain_status":
             p["text"] = original
 
+        elif intent == "open_recent_file":
+            p["query"] = original
+
         elif intent == "compose_email":
             # Extract: to, subject, body from natural speech
             # "write email to rahul@gmail.com subject meeting body let's meet at 5"
@@ -1201,6 +1286,8 @@ class Brain:
             # ── Files ──────────────────────────────────
             if intent == "find_file":
                 return files.find_file(params.get("name", ""))
+            if intent == "open_recent_file":
+                return files.open_recent_file(params.get("query", original))
             if intent == "open_folder":
                 return files.open_folder(params.get("folder", "downloads"))
             if intent == "read_file":

@@ -72,7 +72,7 @@ ELEVENLABS_SIMILARITY_BOOST = float(os.getenv("ELEVENLABS_SIMILARITY_BOOST", "0.
 ELEVENLABS_STYLE = float(os.getenv("ELEVENLABS_STYLE", "0.22"))
 ELEVENLABS_SPEAKER_BOOST = os.getenv("ELEVENLABS_SPEAKER_BOOST", "true").lower() == "true"
 TTS_ENGINE          = os.getenv("TTS_ENGINE", "auto").lower().strip()
-VOICE_PROFILE       = os.getenv("VOICE_PROFILE", "cute_girl").lower().strip()
+VOICE_PROFILE       = os.getenv("VOICE_PROFILE", "human_girl").lower().strip()
 EDGE_VOICE          = os.getenv("EDGE_VOICE", "").strip()
 TTS_RATE            = os.getenv("TTS_RATE", "-4%").strip()
 TTS_PITCH           = os.getenv("TTS_PITCH", "+4Hz").strip()

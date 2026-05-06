@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import os
+import queue
 import tempfile
 import threading
+import time
 
 from config.logger import get_logger
 from config.settings import (
@@ -28,6 +30,14 @@ from config.settings import (
 log = get_logger("speaker")
 
 VOICE_PROFILES = {
+    "human_girl": {
+        "edge_voice": "en-IN-NeerjaExpressiveNeural",
+        "rate": "-8%",
+        "pitch": "+1Hz",
+        "volume": "+0%",
+        "pyttsx3_rate": 158,
+        "pyttsx3_voice_keywords": ["neerja", "zira", "female", "hazel", "aria"],
+    },
     "cute_girl": {
         "edge_voice": "en-US-AvaMultilingualNeural",
         "rate": "-6%",
@@ -54,7 +64,7 @@ VOICE_PROFILES = {
     },
 }
 
-DEFAULT_PROFILE = VOICE_PROFILES["cute_girl"]
+DEFAULT_PROFILE = VOICE_PROFILES["human_girl"]
 
 
 class Speaker:
@@ -62,7 +72,13 @@ class Speaker:
         self._lock = threading.Lock()
         self._speaking = False
         self._eleven_voice_lookup_done = False
-        self.profile_name = VOICE_PROFILE if VOICE_PROFILE in VOICE_PROFILES else "cute_girl"
+        self._stop_event = threading.Event()
+        self._speech_queue: queue.Queue = queue.Queue()
+        self._request_counter = 0
+        self._current_request_id = 0
+        self._current_text = ""
+        self._pyttsx3_engine = None
+        self.profile_name = VOICE_PROFILE if VOICE_PROFILE in VOICE_PROFILES else "human_girl"
         self.profile = VOICE_PROFILES.get(self.profile_name, DEFAULT_PROFILE)
         self.edge_voice = EDGE_VOICE or self.profile["edge_voice"]
         self.edge_rate = TTS_RATE or self.profile["rate"]
@@ -72,6 +88,8 @@ class Speaker:
         self.eleven_voice_name = ELEVENLABS_VOICE_NAME.strip()
         self.playback_backend = self._detect_playback_backend()
         self.engine = self._detect_engine()
+        self._worker = threading.Thread(target=self._worker_loop, daemon=True)
+        self._worker.start()
         log.info(
             f"TTS engine: {self.engine}  "
             f"(profile: {self.profile_name}, voice: {self.edge_voice}, playback: {self.playback_backend})"
@@ -192,19 +210,40 @@ class Speaker:
 
         return self.eleven_voice_id
 
-    def speak(self, text: str, blocking: bool = True):
+    def speak(self, text: str, blocking: bool = True, interrupt: bool = False, on_complete=None):
         if not text or not text.strip():
             return
+
         text = text.strip()
         log.info(f"TTS: {text[:80]}")
+        done = threading.Event()
+        with self._lock:
+            self._request_counter += 1
+            request_id = self._request_counter
+
+        if interrupt:
+            self.stop(clear_queue=True)
+
+        self._speech_queue.put(
+            {
+                "id": request_id,
+                "text": text,
+                "done": done,
+                "on_complete": on_complete,
+            }
+        )
+
         if blocking:
-            self._speak(text)
-        else:
-            threading.Thread(target=self._speak, args=(text,), daemon=True).start()
+            done.wait()
 
     @property
     def is_speaking(self) -> bool:
         return self._speaking
+
+    @property
+    def current_text(self) -> str:
+        with self._lock:
+            return self._current_text
 
     def acknowledge(self) -> bool:
         try:
@@ -216,28 +255,94 @@ class Speaker:
         except Exception:
             return False
 
-    def _speak(self, text: str):
-        with self._lock:
-            self._speaking = True
+    def stop(self, clear_queue: bool = True):
+        self._stop_event.set()
+        self._stop_active_playback()
+        if not clear_queue:
+            return
+
+        while True:
             try:
-                if self.engine == "elevenlabs":
-                    self._eleven(text)
-                elif self.engine == "edge":
-                    self._edge(text)
-                elif self.engine == "gtts":
-                    self._gtts(text)
-                elif self.engine == "pyttsx3":
-                    self._pyttsx3(text)
-                else:
-                    print(f"\n[JARVIS] {text}\n")
-            except Exception as exc:
-                log.error(f"TTS error ({self.engine}): {exc}")
+                pending = self._speech_queue.get_nowait()
+            except queue.Empty:
+                break
+
+            done = pending.get("done")
+            if done:
+                done.set()
+
+            callback = pending.get("on_complete")
+            if callback:
                 try:
-                    self._pyttsx3(text)
-                except Exception:
-                    print(f"\n[JARVIS] {text}\n")
+                    callback(True)
+                except TypeError:
+                    callback()
+                except Exception as exc:
+                    log.warning(f"Speech completion callback failed: {exc}")
+
+    def _worker_loop(self):
+        while True:
+            request = self._speech_queue.get()
+            request_id = request["id"]
+            text = request["text"]
+            done = request["done"]
+            on_complete = request.get("on_complete")
+            interrupted = False
+
+            with self._lock:
+                self._stop_event.clear()
+                self._speaking = True
+                self._current_request_id = request_id
+                self._current_text = text
+
+            try:
+                self._speak_now(text)
+            except Exception as exc:
+                if self._stop_event.is_set():
+                    interrupted = True
+                else:
+                    log.error(f"TTS error ({self.engine}): {exc}")
+                    try:
+                        if self.engine != "pyttsx3":
+                            self._pyttsx3(text)
+                        else:
+                            raise
+                    except Exception:
+                        print(f"\n[JARVIS] {text}\n")
             finally:
-                self._speaking = False
+                interrupted = interrupted or self._stop_event.is_set()
+                with self._lock:
+                    if self._current_request_id == request_id:
+                        self._speaking = False
+                        self._current_request_id = 0
+                        self._current_text = ""
+                    self._pyttsx3_engine = None
+                    self._stop_event.clear()
+                done.set()
+                if on_complete:
+                    try:
+                        on_complete(interrupted)
+                    except TypeError:
+                        on_complete()
+                    except Exception as exc:
+                        log.warning(f"Speech completion callback failed: {exc}")
+
+    def _speak_now(self, text: str):
+        if self._stop_event.is_set():
+            return
+        if self.engine == "elevenlabs":
+            self._eleven(text)
+            return
+        if self.engine == "edge":
+            self._edge(text)
+            return
+        if self.engine == "gtts":
+            self._gtts(text)
+            return
+        if self.engine == "pyttsx3":
+            self._pyttsx3(text)
+            return
+        print(f"\n[JARVIS] {text}\n")
 
     def _edge(self, text: str):
         import edge_tts
@@ -262,6 +367,8 @@ class Speaker:
             loop.close()
 
         try:
+            if self._stop_event.is_set():
+                return
             self._play_audio_file(tmp_path)
         finally:
             try:
@@ -277,6 +384,8 @@ class Speaker:
             tmp_path = file_handle.name
         tts.save(tmp_path)
         try:
+            if self._stop_event.is_set():
+                return
             self._play_audio_file(tmp_path)
         finally:
             try:
@@ -301,9 +410,13 @@ class Speaker:
             pygame.mixer.music.load(path)
             pygame.mixer.music.play()
             while pygame.mixer.music.get_busy():
-                pygame.time.Clock().tick(10)
+                if self._stop_event.is_set():
+                    pygame.mixer.music.stop()
+                    break
+                pygame.time.Clock().tick(20)
         finally:
-            pygame.mixer.quit()
+            if pygame.mixer.get_init():
+                pygame.mixer.quit()
 
     def _play_with_sounddevice(self, path: str):
         import numpy as np
@@ -313,13 +426,25 @@ class Speaker:
         data, sample_rate = sf.read(path, dtype="float32")
         if getattr(data, "ndim", 1) == 1:
             data = np.column_stack([data, data])
-        sd.play(data, sample_rate)
-        sd.wait()
+
+        sd.play(data, sample_rate, blocking=False)
+        try:
+            while True:
+                stream = sd.get_stream()
+                if not stream or not getattr(stream, "active", False):
+                    break
+                if self._stop_event.is_set():
+                    sd.stop()
+                    break
+                time.sleep(0.05)
+        finally:
+            sd.stop()
 
     def _pyttsx3(self, text: str):
         import pyttsx3
 
         engine = pyttsx3.init()
+        self._pyttsx3_engine = engine
         engine.setProperty("rate", self.profile.get("pyttsx3_rate", 165))
         engine.setProperty("volume", 1.0)
         keywords = self.profile.get("pyttsx3_voice_keywords", [])
@@ -329,8 +454,48 @@ class Speaker:
             if any(keyword in voice_name for keyword in keywords):
                 engine.setProperty("voice", voice.id)
                 break
+
         engine.say(text)
-        engine.runAndWait()
+        engine.startLoop(False)
+        try:
+            while True:
+                if self._stop_event.is_set():
+                    engine.stop()
+                    break
+                engine.iterate()
+                if not engine.isBusy():
+                    break
+                time.sleep(0.01)
+        finally:
+            try:
+                engine.endLoop()
+            except Exception:
+                pass
+
+    def _stop_active_playback(self):
+        engine = self._pyttsx3_engine
+        if engine is not None:
+            try:
+                engine.stop()
+            except Exception:
+                pass
+
+        if self.playback_backend == "pygame":
+            try:
+                import pygame
+
+                if pygame.mixer.get_init():
+                    pygame.mixer.music.stop()
+            except Exception:
+                pass
+
+        if self.playback_backend == "sounddevice":
+            try:
+                import sounddevice as sd
+
+                sd.stop()
+            except Exception:
+                pass
 
     def _eleven(self, text: str):
         import requests
@@ -362,6 +527,8 @@ class Speaker:
             file_handle.write(response.content)
             tmp_path = file_handle.name
         try:
+            if self._stop_event.is_set():
+                return
             self._play_audio_file(tmp_path)
         finally:
             try:

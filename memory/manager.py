@@ -2,6 +2,7 @@
 
 import datetime
 import json
+import re
 import sqlite3
 import threading
 from pathlib import Path
@@ -397,6 +398,155 @@ class MemoryManager:
             self.conn.commit()
         return f"Profile memory saved: {cleaned}"
 
+    def save_profile_detail(self, category: str, key: str, value: str, label: str = "") -> str:
+        clean_category = (category or "general").strip().lower() or "general"
+        clean_key = self._normalize_text(key).lower().replace(" ", "_")
+        clean_value = self._normalize_text(value)
+        if not clean_key or not clean_value:
+            return f"Profile detail was empty, {USER_NAME}."
+
+        display = self._normalize_text(label) if label else clean_value
+        now = datetime.datetime.now().isoformat()
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT INTO profile_entries (category, key, value, created, updated)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(category, key) DO UPDATE SET
+                    value=excluded.value,
+                    updated=excluded.updated
+                """,
+                (clean_category, clean_key, display, now, now),
+            )
+            self.conn.commit()
+        return f"Profile memory saved: {display}"
+
+    def learn_profile_from_text(self, text: str) -> list[str]:
+        cleaned = self._normalize_text(text)
+        if not cleaned:
+            return []
+
+        learned = []
+
+        def store(category: str, key: str, raw_value: str, label: str, formatter=None):
+            value = self._normalize_text(raw_value)
+            if not value:
+                return
+            if formatter:
+                value = formatter(value)
+            display = f"{label}: {value}"
+            self.save_profile_detail(category, key, value, label=display)
+            if display not in learned:
+                learned.append(display)
+
+        def title_case_words(value: str) -> str:
+            words = []
+            for word in value.split():
+                if word.islower():
+                    words.append(word.capitalize())
+                else:
+                    words.append(word)
+            return " ".join(words)
+
+        def trim_simple_clause(value: str) -> str:
+            value = re.split(r"\b(?:and\s+my|and\s+i|but\s+my|but\s+i)\b", value, maxsplit=1, flags=re.IGNORECASE)[0]
+            value = re.split(r"[.;]", value, maxsplit=1)[0]
+            return value.strip(" ,")
+
+        email_match = re.search(
+            r"\b(?:my\s+)?email(?:\s+address)?(?:\s+is|:)?\s+([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})",
+            cleaned,
+            re.IGNORECASE,
+        )
+        if email_match:
+            store("contact", "email", email_match.group(1).lower(), "Email")
+
+        phone_match = re.search(
+            r"\b(?:my\s+)?(?:phone|mobile|contact)(?:\s+number)?(?:\s+is|:)?\s*(\+?\d[\d\s-]{7,}\d)",
+            cleaned,
+            re.IGNORECASE,
+        )
+        if phone_match:
+            digits = phone_match.group(1).strip()
+            digits = re.sub(r"\s+", " ", digits)
+            store("contact", "phone", digits, "Phone")
+
+        name_match = re.search(
+            r"\b(?:my\s+full\s+name\s+is|my\s+name\s+is)\s+([a-z][a-z .'-]{1,60})",
+            cleaned,
+            re.IGNORECASE,
+        )
+        if name_match:
+            store("identity", "full_name", trim_simple_clause(name_match.group(1)), "Full name", formatter=title_case_words)
+
+        location_match = re.search(
+            r"\b(?:i\s+live\s+in|i\s+am\s+from|my\s+address\s+is)\s+(.+)",
+            cleaned,
+            re.IGNORECASE,
+        )
+        if location_match:
+            location = trim_simple_clause(location_match.group(1))
+            store("identity", "location", location, "Location", formatter=title_case_words)
+
+        role_match = re.search(
+            r"\b(?:i\s+work\s+as|my\s+role\s+is|my\s+designation\s+is)\s+(.+)",
+            cleaned,
+            re.IGNORECASE,
+        )
+        if role_match:
+            store("work", "role", trim_simple_clause(role_match.group(1)), "Role", formatter=title_case_words)
+
+        company_match = re.search(
+            r"\b(?:i\s+work\s+at|i\s+am\s+working\s+at|my\s+company\s+is)\s+(.+)",
+            cleaned,
+            re.IGNORECASE,
+        )
+        if company_match:
+            store("work", "company", trim_simple_clause(company_match.group(1)), "Company", formatter=title_case_words)
+
+        education_match = re.search(
+            r"\b(?:i\s+study(?:ing)?\s+(?:at|in)|i\s+am\s+a\s+student\s+at|i\s+graduated\s+from|my\s+college\s+is)\s+(.+)",
+            cleaned,
+            re.IGNORECASE,
+        )
+        if education_match:
+            store("education", "school", trim_simple_clause(education_match.group(1)), "Education", formatter=title_case_words)
+
+        skills_match = re.search(
+            r"\b(?:my\s+skills\s+are|skills\s+include|i\s+am\s+skilled\s+in)\s+(.+)",
+            cleaned,
+            re.IGNORECASE,
+        )
+        if skills_match:
+            skills = skills_match.group(1).strip(" .,:;")
+            store("skills", "primary_skills", skills, "Skills")
+
+        goal_match = re.search(
+            r"\b(?:my\s+career\s+goal\s+is|my\s+objective\s+is|i\s+want\s+to\s+become)\s+(.+)",
+            cleaned,
+            re.IGNORECASE,
+        )
+        if goal_match:
+            store("summary", "objective", trim_simple_clause(goal_match.group(1)), "Objective")
+
+        linkedin_match = re.search(r"\b(linkedin\.com/[^\s,;]+)", cleaned, re.IGNORECASE)
+        if linkedin_match:
+            store("links", "linkedin", linkedin_match.group(1), "LinkedIn")
+
+        github_match = re.search(r"\b(github\.com/[^\s,;]+)", cleaned, re.IGNORECASE)
+        if github_match:
+            store("links", "github", github_match.group(1), "GitHub")
+
+        portfolio_match = re.search(
+            r"\b(?:my\s+portfolio\s+is|my\s+website\s+is)\s+((?:https?://)?[^\s,;]+\.[^\s,;]+)",
+            cleaned,
+            re.IGNORECASE,
+        )
+        if portfolio_match:
+            store("links", "portfolio", portfolio_match.group(1), "Portfolio")
+
+        return learned
+
     def get_profile_entries(self, category: str | None = None, limit: int = 20) -> list:
         with self._lock:
             if category:
@@ -421,6 +571,19 @@ class MemoryManager:
                     (limit,),
                 ).fetchall()
         return [{"category": row[0], "key": row[1], "value": row[2], "updated": row[3]} for row in rows]
+
+    def get_profile_snapshot(self) -> dict:
+        rows = self.get_profile_entries(limit=100)
+        snapshot = {}
+        for row in rows:
+            category = row["category"]
+            key = row["key"]
+            value = row["value"]
+            raw_value = value.split(":", 1)[1].strip() if ":" in value else value
+            snapshot.setdefault(category, {})
+            if key not in snapshot[category]:
+                snapshot[category][key] = raw_value
+        return snapshot
 
     def profile_summary(self, limit: int = 10) -> str:
         entries = self.get_profile_entries(limit=limit)

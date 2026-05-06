@@ -51,7 +51,7 @@ def build_jarvis(gui=None, command_queue=None):
     speaker = Speaker()
     memory = MemoryManager()
     ai = AIClient()
-    files = FilesController()
+    files = FilesController(memory=memory)
 
     def notify(title, msg):
         if gui:

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import queue
+import re
 import threading
 import time
+from difflib import SequenceMatcher
 
 from config.logger import get_logger
 from config.settings import (
@@ -230,6 +232,66 @@ class Listener:
     def _should_pause_for_speaker(self) -> bool:
         return bool(self.speaker and getattr(self.speaker, "is_speaking", False))
 
+    @staticmethod
+    def _normalize_spoken_text(text: str) -> str:
+        return " ".join(re.findall(r"[a-z0-9]+", (text or "").lower()))
+
+    def _looks_like_speaker_echo(self, text: str) -> bool:
+        if not self.speaker or not hasattr(self.speaker, "current_text"):
+            return False
+
+        heard = self._normalize_spoken_text(text)
+        raw_current = getattr(self.speaker, "current_text", "")
+        current = self._normalize_spoken_text(raw_current)
+        if not heard or not current:
+            return False
+        if heard in current or current in heard:
+            return True
+
+        for segment in re.split(r"[.!?]+", raw_current):
+            segment = self._normalize_spoken_text(segment)
+            if not segment:
+                continue
+            if heard in segment or segment in heard:
+                return True
+            if SequenceMatcher(None, heard, segment).ratio() >= 0.74:
+                return True
+
+        return SequenceMatcher(None, heard, current).ratio() >= 0.82
+
+    def _monitor_barge_in(self):
+        text = self._listen_once(timeout=1, phrase_limit=max(2, min(VOICE_IDLE_PHRASE_TIME_LIMIT, 3)))
+        if not text or self._looks_like_speaker_echo(text):
+            return
+
+        if self.speaker and hasattr(self.speaker, "stop"):
+            self.speaker.stop(clear_queue=True)
+
+        if self._handle_local_voice_controls(text):
+            return
+
+        voice_open = self.always_listening or self.active_mode
+        if not voice_open:
+            if not self._contains_wake_word(text):
+                return
+            remainder = self._strip_wake_word(text)
+            self.wake(with_callback=True, acknowledge=not bool(remainder))
+            if remainder:
+                self.command_queue.put(f"__VOICE__:{remainder}")
+                self._status("thinking")
+            self.keep_active()
+            return
+
+        cleaned = self._strip_wake_word(text) if self._contains_wake_word(text) else text
+        if not cleaned:
+            self.keep_active()
+            self._status("listening")
+            return
+
+        self._cancel_conversation_timer()
+        self.command_queue.put(f"__VOICE__:{cleaned}")
+        self._status("thinking")
+
     def _listen_once(self, timeout: int, phrase_limit: int) -> str:
         if not self.available or not self.recognizer or not self.mic:
             return ""
@@ -421,7 +483,7 @@ class Listener:
         self._status("listening" if self.always_listening else "sleeping")
         while self.running:
             if self._should_pause_for_speaker():
-                time.sleep(0.15)
+                self._monitor_barge_in()
                 continue
 
             if not self.available:
