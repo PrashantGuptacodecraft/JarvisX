@@ -32,6 +32,7 @@ from tools.terminal.controller import TerminalController
 from tools.web.controller import WebController
 
 from core_loop import CoreLoop
+from tools.vision.gesture_controller import GestureController
 
 log = get_logger("main")
 
@@ -102,7 +103,13 @@ def build_jarvis(gui=None, command_queue=None):
         gui.listener = listener
         gui.refresh_memory_tab(memory)
 
-    return core, listener, speaker, memory, command_queue
+
+    # Gesture controller (needs gui and command_queue)
+    gesture_ctrl = GestureController(command_queue=command_queue, gui=gui)
+    if gui and hasattr(gui, "_gesture_ctrl"):
+        gui._gesture_ctrl = gesture_ctrl
+
+    return core, listener, speaker, memory, command_queue, gesture_ctrl
 
 
 def boot_message(ai, listener, user_name: str) -> str:
@@ -129,7 +136,9 @@ def run_gui():
 
     cq = queue.Queue()
     gui = JarvisGUI(command_queue=cq)
-    core, listener, speaker, memory, _ = build_jarvis(gui=gui, command_queue=cq)
+    core, listener, speaker, memory, _, gesture_ctrl = build_jarvis(gui=gui, command_queue=cq)
+    if hasattr(gui, '_gesture_ctrl'):
+        gui._gesture_ctrl = gesture_ctrl
 
     listener.start()
     core.start()
@@ -141,7 +150,7 @@ def run_gui():
 
 def run_headless():
     cq = queue.Queue()
-    core, listener, speaker, memory, _ = build_jarvis(gui=None, command_queue=cq)
+    core, listener, speaker, memory, _, gesture_ctrl = build_jarvis(gui=None, command_queue=cq)
     listener.start()
     core.start()
 

@@ -4,7 +4,7 @@ Ultra-futuristic JARVIS GUI.
 Canvas HUD with animated rings + particles, tabbed interface
 (Chat | Terminal | System | Memory), live system metrics, voice waveform.
 """
-import math, random, threading, datetime, time
+import math, random, threading, datetime, time, io
 import queue as q_module
 import tkinter as tk
 import tkinter.font as tkfont
@@ -636,6 +636,8 @@ class JarvisGUI:
 
         btn(parent, "⊙  ACTIVATE",  BLUE, TEXT1, self._activate)
         btn(parent, "◌  SLEEP",     BG2,  TEXT2, self._sleep)
+        btn(parent, "📷  CAMERA",   PURPLE, TEXT1, self._open_camera_tab)
+        self._gesture_btn = btn(parent, "🖐  GESTURE CTRL", BG2, TEXT2, self._toggle_gesture_control)
         btn(parent, "✕  CLEAR CHAT", BG2, TEXT2, self._clear_chat)
         btn(parent, "⚙  WORKSPACE", BG2,  TEXT2, self._open_workspace)
 
@@ -650,6 +652,7 @@ class JarvisGUI:
             ("💻 System Info", "cpu usage and ram usage"),
             ("🌐 Google", "open google"),
             ("📂 Downloads", "open downloads folder"),
+            ("👁 Look at me", "look at me and describe what you see"),
         ]
         for label, cmd in quick:
             tk.Button(parent, text=label, bg=BG2, fg=TEXT1,
@@ -682,10 +685,23 @@ class JarvisGUI:
         self._nb = ttk.Notebook(console, style="Jarvis.TNotebook")
         self._nb.grid(row=0, column=0, sticky="nsew")
 
-        self._build_chat_tab()
-        self._build_terminal_tab()
-        self._build_system_tab()
-        self._build_memory_tab()
+        for _tab_builder, _tab_name in [
+            (self._build_chat_tab,     "CHAT"),
+            (self._build_terminal_tab, "TERMINAL"),
+            (self._build_system_tab,   "SYSTEM"),
+            (self._build_memory_tab,   "MEMORY"),
+            (self._build_camera_tab,   "CAMERA"),
+        ]:
+            try:
+                _tab_builder()
+            except Exception as _e:
+                import traceback
+                traceback.print_exc()
+                import tkinter as _tk
+                _err_f = _tk.Frame(self._nb, bg="#0a0014")
+                self._nb.add(_err_f, text=f"  {_tab_name}  ")
+                _tk.Label(_err_f, text=f"{_tab_name} tab error:\n{_e}",
+                          fg="#ff4444", bg="#0a0014").pack(pady=40)
 
         # Input bar
         self._build_input_bar(console)
@@ -950,6 +966,372 @@ class JarvisGUI:
 
         self._mem_text.configure(state="disabled")
 
+    # ── Camera tab ───────────────────────────────────────────
+    def _build_camera_tab(self):
+        """Live webcam feed with AI vision query."""
+        f = tk.Frame(self._nb, bg=BG0)
+        self._nb.add(f, text="  CAMERA  ")
+        self._camera_frame_ref = f
+        f.columnconfigure(0, weight=1)
+        f.rowconfigure(0, weight=1)
+
+        # Camera feed canvas
+        self._cam_canvas = tk.Canvas(
+            f, bg="#000508", highlightthickness=1,
+            highlightbackground=PURPLE
+        )
+        self._cam_canvas.grid(row=0, column=0, sticky="nsew", padx=12, pady=(10, 6))
+        self._cam_canvas.create_text(
+            320, 240, text="◉  CAMERA OFFLINE\nPress [ START CAMERA ] to activate",
+            fill=TEXT2, font=self._fonts["body_lg"], justify="center"
+        )
+
+        # Corner HUD overlays drawn on canvas
+        self._cam_overlay_on = False
+
+        # Controls row
+        ctrl = tk.Frame(f, bg=BG0)
+        ctrl.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 4))
+        for i in range(4):
+            ctrl.columnconfigure(i, weight=1)
+
+        self._cam_running   = False
+        self._cam_cap       = None
+        self._cam_photo_ref = None
+        self._cam_last_img  = None   # PIL Image of last frame
+        self._cam_last_frame_raw = None
+        self._gesture_ctrl   = None
+        self._gesture_active = False
+        self._gesture_btn    = None
+        self._gesture_status_var = None
+
+        self._cam_start_btn = tk.Button(
+            ctrl, text="▶  START CAMERA",
+            bg=PURPLE, fg=TEXT1, activebackground=CYAN, activeforeground=BG0,
+            font=self._fonts["button"], relief="flat", cursor="hand2",
+            command=self._toggle_camera
+        )
+        self._cam_start_btn.grid(row=0, column=0, padx=4, pady=6, sticky="ew")
+
+        tk.Button(
+            ctrl, text="📷  SNAPSHOT",
+            bg=BG2, fg=TEXT1, activebackground=CYAN, activeforeground=BG0,
+            font=self._fonts["button"], relief="flat", cursor="hand2",
+            command=self._save_snapshot
+        ).grid(row=0, column=1, padx=4, pady=6, sticky="ew")
+
+        tk.Button(
+            ctrl, text="🤖  ASK JARVIS",
+            bg=BLUE, fg=TEXT1, activebackground=CYAN, activeforeground=BG0,
+            font=self._fonts["button"], relief="flat", cursor="hand2",
+            command=self._ask_about_camera
+        ).grid(row=0, column=2, padx=4, pady=6, sticky="ew")
+
+        tk.Button(
+            ctrl, text="👤  DETECT FACE",
+            bg=BG2, fg=TEXT1, activebackground=GREEN, activeforeground=BG0,
+            font=self._fonts["button"], relief="flat", cursor="hand2",
+            command=self._detect_faces_now
+        ).grid(row=0, column=3, padx=4, pady=6, sticky="ew")
+
+        # Ask prompt row
+        ask_row = tk.Frame(f, bg=BG0)
+        ask_row.grid(row=2, column=0, sticky="ew", padx=12, pady=(0, 8))
+        ask_row.columnconfigure(0, weight=1)
+
+        tk.Label(ask_row, text="Ask about what camera sees:",
+                 font=self._fonts["body_sm"], fg=TEXT2, bg=BG0).pack(anchor="w")
+
+        ask_inner = tk.Frame(ask_row, bg=BG0)
+        ask_inner.pack(fill="x", pady=4)
+        ask_inner.columnconfigure(0, weight=1)
+
+        self._cam_ask_var = tk.StringVar()
+        cam_entry = tk.Entry(
+            ask_inner, textvariable=self._cam_ask_var,
+            bg=BG2, fg=TEXT1, insertbackground=PURPLE,
+            font=self._fonts["input"], relief="flat",
+            highlightthickness=1, highlightbackground=PURPLE
+        )
+        cam_entry.grid(row=0, column=0, sticky="ew", ipady=6)
+        cam_entry.bind("<Return>", lambda e: self._ask_about_camera())
+
+        tk.Button(
+            ask_inner, text="ASK  →",
+            bg=PURPLE, fg=TEXT1, activebackground=CYAN, activeforeground=BG0,
+            font=self._fonts["button"], relief="flat", cursor="hand2",
+            command=self._ask_about_camera
+        ).grid(row=0, column=1, padx=(6, 0))
+
+        # Status labels
+        self._cam_status_var = tk.StringVar(value="Camera offline")
+        tk.Label(f, textvariable=self._cam_status_var,
+                 font=self._fonts["body_sm"], fg=PURPLE, bg=BG0
+                ).grid(row=3, column=0, pady=(0, 2))
+
+        self._gesture_status_var = tk.StringVar(value="—  Gesture control off")
+        tk.Label(f, textvariable=self._gesture_status_var,
+                 font=self._fonts["body_sm"], fg=GREEN, bg=BG0
+                ).grid(row=4, column=0, pady=(0, 4))
+
+        # Gesture legend
+        legend_f = tk.Frame(f, bg=BG0)
+        legend_f.grid(row=5, column=0, sticky="ew", padx=12, pady=(0, 8))
+        tk.Label(legend_f, text="GESTURE LEGEND", font=self._fonts["section"],
+                 fg=TEXT2, bg=BG0).pack(anchor="w")
+        gestures = [
+            ("☝  Index only",       "Move cursor"),
+            ("🤏  Pinch",              "Left click"),
+            ("✌  Index+Middle",     "Right click"),
+            ("🤚  Open palm",          "Scroll up"),
+            ("✊  Fist",               "Scroll down"),
+            ("👍  Thumb up",           "Volume up"),
+            ("👎  Thumb down",         "Volume down"),
+            ("🤘  Rock sign",           "Screenshot"),
+            ("🖐  All up + wrist high", "Wake JARVIS"),
+        ]
+        for g, action in gestures:
+            row_f = tk.Frame(legend_f, bg=BG0)
+            row_f.pack(fill="x", pady=1)
+            tk.Label(row_f, text=g, font=self._fonts["body_sm"],
+                     fg=TEXT1, bg=BG0, width=22, anchor="w").pack(side="left")
+            tk.Label(row_f, text=action, font=self._fonts["body_sm"],
+                     fg=CYAN, bg=BG0).pack(side="left")
+
+
+    def _toggle_gesture_control(self):
+        if not self._gesture_ctrl:
+            self.show_notification('Gesture Control', 'Restart JARVIS to enable gesture control.')
+            return
+        active = self._gesture_ctrl.toggle(cam_index=0)
+        self._gesture_active = active
+        if active:
+            if self._gesture_btn: self._gesture_btn.configure(text='GESTURE ON', bg=GREEN, fg=BG0)
+            if self._gesture_status_var: self._gesture_status_var.set('Gesture control ACTIVE')
+            self._open_camera_tab()
+            if not self._cam_running: self._start_camera()
+        else:
+            if self._gesture_btn: self._gesture_btn.configure(text='GESTURE CTRL', bg=BG2, fg=TEXT2)
+            if self._gesture_status_var: self._gesture_status_var.set('Gesture control off')
+
+    def _open_camera_tab(self):
+        """Switch to camera tab."""
+        for i in range(self._nb.index("end")):
+            if "CAMERA" in self._nb.tab(i, "text"):
+                self._nb.select(i)
+                break
+
+    def _toggle_camera(self):
+        if self._cam_running:
+            self._stop_camera()
+        else:
+            self._start_camera()
+
+    def _start_camera(self):
+        try:
+            import cv2  # noqa
+        except ImportError:
+            self._cam_status_var.set("opencv-python not installed. Run: pip install opencv-python")
+            return
+        import cv2
+        cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+        if not cap.isOpened():
+            cap = cv2.VideoCapture(0)   # fallback to default backend
+        if not cap.isOpened():
+            self._cam_status_var.set("⚠ Camera not accessible. Check permissions.")
+            return
+        self._cam_cap = cap
+        self._cam_running = True
+        self._cam_start_btn.configure(text="⏹  STOP CAMERA", bg=RED)
+        self._cam_status_var.set("◉  CAMERA LIVE")
+        self._cam_overlay_on = True
+        threading.Thread(target=self._camera_loop, daemon=True).start()
+
+    def _stop_camera(self):
+        self._cam_running = False
+        if self._cam_cap:
+            try:
+                self._cam_cap.release()
+            except Exception:
+                pass
+            self._cam_cap = None
+        self._cam_start_btn.configure(text="▶  START CAMERA", bg=PURPLE)
+        self._cam_status_var.set("Camera stopped")
+        self._cam_overlay_on = False
+        self.root.after(100, lambda: (
+            self._cam_canvas.delete("all"),
+            self._cam_canvas.create_text(
+                self._cam_canvas.winfo_width() // 2 or 320,
+                self._cam_canvas.winfo_height() // 2 or 240,
+                text="◉  CAMERA OFFLINE",
+                fill=TEXT2, font=self._fonts["body_lg"]
+            )
+        ))
+
+    def _camera_loop(self):
+        """Background thread: read frames and push to canvas."""
+        import cv2
+        while self._cam_running and self._cam_cap:
+            ret, frame = self._cam_cap.read()
+            if not ret:
+                break
+            self._cam_last_frame_raw = frame.copy()   # BGR numpy for CV ops
+            # Convert BGR → RGB → PIL
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            self.root.after(0, self._update_camera_frame, rgb)
+            import time as _t
+            _t.sleep(0.033)   # ~30 fps
+
+    def _update_camera_frame(self, rgb_array):
+        """Update tkinter canvas with latest frame (runs on main thread)."""
+        try:
+            from PIL import Image, ImageTk, ImageDraw
+        except ImportError:
+            return
+        try:
+            cw = self._cam_canvas.winfo_width()  or 640
+            ch = self._cam_canvas.winfo_height() or 480
+
+            img = Image.fromarray(rgb_array).resize((cw, ch), Image.LANCZOS)
+            self._cam_last_img = img.copy()  # Save clean RGB copy for snapshots/AI
+
+            # Convert to RGBA so we can draw semi-transparent overlays
+            overlay = img.convert("RGBA")
+            draw = ImageDraw.Draw(overlay)
+
+            # Corner HUD brackets (fully opaque cyan)
+            bw, bt, pad = 30, 3, 12
+            for (x0, y0, xd, yd) in [
+                (pad, pad, 1, 1),
+                (cw-pad, pad, -1, 1),
+                (pad, ch-pad, 1, -1),
+                (cw-pad, ch-pad, -1, -1),
+            ]:
+                draw.line([(x0, y0), (x0+xd*bw, y0)], fill=(0, 212, 255, 255), width=bt)
+                draw.line([(x0, y0), (x0, y0+yd*bw)], fill=(0, 212, 255, 255), width=bt)
+
+            # Scanlines (subtle dark lines)
+            for y in range(0, ch, 6):
+                draw.line([(0, y), (cw, y)], fill=(0, 0, 0, 40))
+
+            # Center crosshair
+            cx, cy = cw//2, ch//2
+            draw.line([(cx-20, cy), (cx+20, cy)], fill=(0, 212, 255, 200), width=1)
+            draw.line([(cx, cy-20), (cx, cy+20)], fill=(0, 212, 255, 200), width=1)
+
+            # Convert back to RGB for tkinter
+            final = overlay.convert("RGB")
+
+            photo = ImageTk.PhotoImage(final)
+            self._cam_photo_ref = photo
+            self._cam_canvas.delete("all")
+            self._cam_canvas.create_image(0, 0, anchor="nw", image=photo)
+
+            # Timestamp overlay via canvas text (no PIL needed)
+            now = datetime.datetime.now().strftime("%H:%M:%S")
+            self._cam_canvas.create_text(
+                cw - 8, ch - 8, anchor="se",
+                text="REC  " + now,
+                fill=CYAN, font=self._fonts["body_sm"]
+            )
+        except Exception as _e:
+            import traceback
+            traceback.print_exc()
+
+    def _save_snapshot(self):
+        """Save current frame to disk and notify."""
+        if self._cam_last_img is None:
+            self.show_notification("Camera", "No frame captured yet. Start the camera first.")
+            return
+        import os, tempfile
+        path = os.path.join(tempfile.gettempdir(), "jarvis_snapshot.jpg")
+        self._cam_last_img.save(path)
+        self.show_notification("Snapshot Saved", f"Saved to:\n{path}")
+        self._cam_status_var.set(f"Snapshot saved: {path}")
+
+    def _ask_about_camera(self):
+        """Capture current frame and ask JARVIS to analyze it."""
+        import os as _os, tempfile
+        question = self._cam_ask_var.get().strip()
+        if not question:
+            question = "What do you see? Describe everything in detail."
+
+        # Try to grab the latest frame directly from the live capture
+        if self._cam_cap and self._cam_running:
+            try:
+                import cv2
+                ret, frame = self._cam_cap.read()
+                if ret:
+                    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    from PIL import Image
+                    self._cam_last_img = Image.fromarray(rgb)
+                    self._cam_last_frame_raw = frame.copy()
+            except Exception:
+                pass
+
+        if self._cam_last_img is None:
+            if not self._cam_running:
+                self.show_notification("Camera", "Start the camera first — press the START CAMERA button.")
+            else:
+                self.show_notification("Camera", "Camera is starting up, please wait a moment and try again.")
+            return
+
+        frame_path = _os.path.join(tempfile.gettempdir(), "jarvis_cam_ask.jpg")
+        try:
+            self._cam_last_img.save(frame_path)
+        except Exception as e:
+            self.show_notification("Camera", f"Could not save frame: {e}")
+            return
+
+        self._cam_ask_var.set("")
+        cmd = "look at camera image " + frame_path + " and answer: " + question
+        self.add_user_message("[Camera] " + question)
+        self.command_queue.put(cmd)
+        self._cam_status_var.set("Analyzing frame...")
+
+    def _detect_faces_now(self):
+        """Run face detection on current frame."""
+        if not hasattr(self, "_cam_last_frame_raw") or self._cam_last_frame_raw is None:
+            self.show_notification("Camera", "Start the camera first.")
+            return
+        try:
+            import cv2
+            import numpy as np
+            face_detector = cv2.CascadeClassifier(
+                cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+            )
+            gray = cv2.cvtColor(self._cam_last_frame_raw, cv2.COLOR_BGR2GRAY)
+            faces = face_detector.detectMultiScale(
+                gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60)
+            )
+            count = len(faces)
+            msg = f"{count} face(s) detected" if count else "No faces detected"
+            self._cam_status_var.set(f"◉  {msg}")
+            self.show_notification("Face Detection", msg)
+            # Draw boxes on canvas if faces found
+            if count and self._cam_last_img:
+                from PIL import Image, ImageTk, ImageDraw
+                img = self._cam_last_img.copy()
+                draw = ImageDraw.Draw(img)
+                cw = self._cam_canvas.winfo_width() or 640
+                ch = self._cam_canvas.winfo_height() or 480
+                scale_x = cw / self._cam_last_frame_raw.shape[1]
+                scale_y = ch / self._cam_last_frame_raw.shape[0]
+                for (x, y, w, h) in faces:
+                    draw.rectangle(
+                        [int(x*scale_x), int(y*scale_y),
+                         int((x+w)*scale_x), int((y+h)*scale_y)],
+                        outline=(0, 255, 136), width=2
+                    )
+                photo = ImageTk.PhotoImage(img)
+                self._cam_photo_ref = photo
+                self._cam_canvas.delete("all")
+                self._cam_canvas.create_image(0, 0, anchor="nw", image=photo)
+        except ImportError:
+            self._cam_status_var.set("opencv-python not installed")
+        except Exception as e:
+            self._cam_status_var.set(f"Error: {e}")
+
     # ── Input bar ────────────────────────────────────────────
     def _build_input_bar(self, parent):
         bar = tk.Frame(parent, bg=BG2,
@@ -1146,6 +1528,8 @@ class JarvisGUI:
     def _on_close(self):
         self._running = False
         self._hud.stop()
+        if getattr(self, "_cam_running", False):
+            self._stop_camera()
         self.root.destroy()
 
     def run(self):

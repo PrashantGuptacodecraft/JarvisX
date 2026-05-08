@@ -152,6 +152,7 @@ class Brain:
         self._last_whatsapp_contact = ""
         self._pending_whatsapp_contact = ""
         self._pending_whatsapp_message = ""
+        self._last_cam_image = ""   # Path to last camera frame for vision queries
 
     def set_terminal_log(self, callback):
         """Allow GUI terminal tab to receive command outputs."""
@@ -177,6 +178,42 @@ class Brain:
         text = text.strip()
         text_lower = text.lower()
 
+
+        # ── Camera vision: intercept queries about what camera sees ──────
+        # Commands from UI: "look at camera image <path> and answer: <question>"
+        import re as _re
+        cam_match = _re.match(
+            r'look at camera image (.+?) and answer:\s*(.+)', text, _re.IGNORECASE | _re.DOTALL
+        )
+        if cam_match:
+            import pathlib as _pl
+            try:
+                img_path = str(_pl.Path(cam_match.group(1).strip()).resolve())
+            except Exception:
+                img_path = cam_match.group(1).strip()
+            question = cam_match.group(2).strip()
+            self._last_cam_image = img_path
+            log.info(f"Camera vision query: {question!r} on {img_path}")
+            return self.ai.chat_with_image(question, img_path, voice_mode=voice_mode)
+
+        # Natural camera questions: use last saved frame if one exists
+        _camera_phrases = [
+            "what do you see", "what can you see", "what's in the camera",
+            "what is in the camera", "what's in picture", "what in picture",
+            "what the object", "what object", "describe what you see",
+            "look at me", "look at my face", "how do i look",
+            "my expression", "my face", "my hair", "hairstyle",
+            "suggest hair", "suggest hairstyle", "haircut suggestion",
+            "what am i wearing", "what color", "tell me about",
+            "analyze my", "read my face", "my mood", "my emotion",
+            "what other things", "anything else in", "describe the scene",
+            "whats around", "what's around",
+        ]
+        if self._last_cam_image and any(ph in text_lower for ph in _camera_phrases):
+            log.info(f"Camera context query (natural): {text!r}")
+            return self.ai.chat_with_image(text, self._last_cam_image, voice_mode=voice_mode)
+
+        # ── End camera vision ────────────────────────────────────────────
         # Handle pending confirmation
         if self.pending:
             return self._handle_confirmation(text_lower)
