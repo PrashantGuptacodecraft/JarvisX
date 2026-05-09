@@ -1,6 +1,7 @@
 """core_loop.py - Command processor: queue -> brain -> speaker -> GUI."""
 
 import os
+import tempfile
 import queue
 import threading
 
@@ -13,6 +14,22 @@ WAKE_REPLY = "Listening."
 SLEEP_REPLY = f"Going to standby. Say 'Hello {JARVIS_NAME}' whenever you need me."
 ALWAYS_LISTEN_REPLY = f"Always listening mode enabled, {USER_NAME}. You can speak commands without the wake word."
 WAKE_MODE_REPLY = f"Wake word mode enabled, {USER_NAME}. Say 'Hello {JARVIS_NAME}' when you need me."
+
+
+# ── Camera command phrase sets (class-level to avoid rebuilding every call) ──
+_CAM_SNAP_PHRASES = [
+    "click a photo", "take a photo", "take photo", "click photo",
+    "capture photo", "take a picture", "click a picture",
+    "take picture", "capture image", "take snapshot",
+]
+_CAM_QUESTION_PHRASES = [
+    "what do you see", "what can you see", "look at me",
+    "what's in camera", "what is in camera", "describe what you see",
+    "what the object", "what in picture", "what object",
+    "my expression", "my face", "how do i look", "my hair",
+    "suggest hairstyle", "suggest hair", "analyze my face",
+    "what am i wearing", "what other things", "what around",
+]
 
 
 class CoreLoop:
@@ -42,9 +59,14 @@ class CoreLoop:
 
     def _process(self, command: str):
         voice_source = False
+        already_displayed = False  # True when GUI already showed the user bubble
         if command.startswith("__VOICE__:"):
             voice_source = True
             command = command[len("__VOICE__:"):].strip()
+        elif command.startswith("__TEXT__:"):
+            # Typed from GUI chat box — display was already done by _on_submit
+            already_displayed = True
+            command = command[len("__TEXT__:"):].strip()
         command = command.strip()
         if not command:
             return
@@ -78,27 +100,15 @@ class CoreLoop:
 
 
         # ── Camera voice command intercept ──────────────────────────────
-        _cam_snap_phrases = [
-            "click a photo", "take a photo", "take photo", "click photo",
-            "capture photo", "take a picture", "click a picture",
-            "take picture", "capture image", "take snapshot",
-        ]
-        _cam_question_phrases = [
-            "what do you see", "what can you see", "look at me",
-            "what's in camera", "what is in camera", "describe what you see",
-            "what the object", "what in picture", "what object",
-            "my expression", "my face", "how do i look", "my hair",
-            "suggest hairstyle", "suggest hair", "analyze my face",
-            "what am i wearing", "what other things", "what around",
-        ]
+        # (phrase lists are module-level constants _CAM_SNAP_PHRASES / _CAM_QUESTION_PHRASES)
         cmd_low = command.lower()
         _cam_frame_path = os.path.join(
-            __import__("tempfile").gettempdir(), "jarvis_cam_ask.jpg"
+            tempfile.gettempdir(), "jarvis_cam_ask.jpg"
         )
         _has_live_frame = os.path.exists(_cam_frame_path)
 
         # Snapshot request via voice → capture frame from GUI camera
-        if any(ph in cmd_low for ph in _cam_snap_phrases):
+        if any(ph in cmd_low for ph in _CAM_SNAP_PHRASES):
             if self.gui and hasattr(self.gui, "_cam_last_img") and self.gui._cam_last_img:
                 self.gui._cam_last_img.save(_cam_frame_path)
                 self.brain._last_cam_image = _cam_frame_path
@@ -116,7 +126,7 @@ class CoreLoop:
                 return
 
         # Camera question via voice → use last frame for vision
-        if any(ph in cmd_low for ph in _cam_question_phrases) and _has_live_frame:
+        if any(ph in cmd_low for ph in _CAM_QUESTION_PHRASES) and _has_live_frame:
             # Auto-capture latest frame if camera is running
             if self.gui and hasattr(self.gui, "_cam_last_img") and self.gui._cam_last_img:
                 self.gui._cam_last_img.save(_cam_frame_path)
@@ -138,7 +148,8 @@ class CoreLoop:
         # ── End camera voice intercept ───────────────────────────────────
         if self.gui:
             self.gui.set_status("thinking")
-            self.gui.add_user_message(command)
+            if not already_displayed:   # voice commands: show recognized text
+                self.gui.add_user_message(command)
 
         log.info(f"Processing: {command}")
         try:
@@ -179,7 +190,7 @@ class CoreLoop:
             )
             return
 
-        print(f"\n[{JARVIS_NAME}]: {text}\n")
+        log.info("[%s] %s", JARVIS_NAME, text)
         self._finish_reply(token)
 
     def _finish_reply(self, token: int):
@@ -203,7 +214,7 @@ class CoreLoop:
         if self.speaker:
             self.speaker.speak(text)
         else:
-            print(f"\n[{JARVIS_NAME}]: {text}\n")
+            log.info("[%s] %s", JARVIS_NAME, text)
 
     def on_wake(self, acknowledge: bool = True):
         if self.gui:

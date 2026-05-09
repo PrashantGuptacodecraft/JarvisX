@@ -11,6 +11,7 @@ import urllib.parse
 import webbrowser
 from pathlib import Path
 
+
 from config.logger import get_logger
 from config.settings import USER_NAME
 
@@ -25,11 +26,228 @@ CONTACT_NUMBERS = {
 
 WINDOW_TITLES = ["WhatsApp", "WhatsApp Beta"]
 
+# ── SafeWhatsAppSender constants ──────────────────────────────────────────────
+SAFE_CLICK_DELAY    = 0.5    # seconds between automation actions
+WHATSAPP_LOAD_WAIT  = 3.0    # seconds to wait after opening WhatsApp
+MAX_RETRY_ATTEMPTS  = 3      # max retries for safe_send_message
+
+
+class SafeWhatsAppSender:
+    """
+    Safe WhatsApp message sender that avoids accidentally triggering calls.
+
+    Uses pyautogui + pygetwindow (already in requirements.txt).
+    Works alongside the existing WhatsAppController — call safe_send_message()
+    and it will fall back to pywhatkit web method on any failure.
+    """
+
+    def __init__(self):
+        self._log = get_logger("whatsapp.safe")
+
+    # ── Internal helpers ──────────────────────────────────────────────────────
+
+    def _get_wa_window(self):
+        """Return the largest visible WhatsApp window, or None."""
+        try:
+            import pygetwindow as gw
+        except ImportError:
+            return None
+        wins = []
+        for title in WINDOW_TITLES:
+            wins.extend(gw.getWindowsWithTitle(title))
+        visible = [w for w in wins if getattr(w, "width", 0) >= 320 and getattr(w, "height", 0) >= 500]
+        if not visible:
+            return None
+        return max(visible, key=lambda w: w.width * w.height)
+
+    def _window_title(self) -> str:
+        """Return the current active window title (lowercase)."""
+        try:
+            import pygetwindow as gw
+            title = gw.getActiveWindowTitle() or ""
+            return title.lower()
+        except Exception:
+            return ""
+
+    # ── Public API ────────────────────────────────────────────────────────────
+
+    def is_call_active(self) -> bool:
+        """
+        Detect if a WhatsApp call is currently active.
+
+        Checks two signals:
+          1. Window title contains call-related keywords ("calling", "on a call").
+          2. WhatsApp window has an unusual aspect ratio consistent with call UI.
+        Returns True if a call appears to be in progress.
+        """
+        title = self._window_title()
+        call_keywords = ("calling", "on a call", "voice call", "video call", "incoming call")
+        if any(kw in title for kw in call_keywords):
+            self._log.info("Call detected via window title: %r", title)
+            return True
+
+        win = self._get_wa_window()
+        if not win:
+            return False
+        # WhatsApp call UI is typically portrait and narrow
+        try:
+            if win.width > 0 and (win.height / win.width) > 2.0:
+                self._log.info("Call detected via window aspect ratio (h/w=%.1f)", win.height / win.width)
+                return True
+        except Exception:
+            pass
+        return False
+
+    def cancel_active_call(self) -> bool:
+        """
+        End an active WhatsApp call by pressing Escape or clicking the end-call area.
+
+        Returns True if the cancel action was sent, False if WhatsApp was not found.
+        """
+        try:
+            import pyautogui
+        except ImportError:
+            self._log.warning("pyautogui not available — cannot cancel call")
+            return False
+
+        win = self._get_wa_window()
+        if not win:
+            self._log.warning("cancel_active_call: WhatsApp window not found")
+            return False
+
+        try:
+            if getattr(win, "isMinimized", False):
+                win.restore()
+            win.activate()
+            time.sleep(SAFE_CLICK_DELAY)
+            # Press Escape first — ends call in WhatsApp Desktop
+            pyautogui.press("escape")
+            time.sleep(1.0)
+            self._log.info("Sent Escape to cancel active WhatsApp call")
+            return True
+        except Exception as exc:
+            self._log.warning("cancel_active_call failed: %s", exc)
+            return False
+
+    def find_message_input_box(self) -> "tuple[int, int] | None":
+        """
+        Locate the WhatsApp message input box safely using window-relative coordinates.
+
+        The input box is always in the lower-centre of the chat area.
+        Returns (x, y) screen coordinates, or None if window is not found.
+        """
+        win = self._get_wa_window()
+        if not win:
+            return None
+        try:
+            # Input box is at ~50% width, ~93% height of the WhatsApp window
+            x = win.left + int(win.width * 0.50)
+            y = win.top  + int(win.height * 0.93)
+            self._log.debug("Message input box estimated at (%d, %d)", x, y)
+            return x, y
+        except Exception as exc:
+            self._log.warning("find_message_input_box failed: %s", exc)
+            return None
+
+    def safe_send_message(self, phone_number: str, message: str) -> bool:
+        """
+        Send a WhatsApp message safely, avoiding call button areas.
+
+        Step 1: Open WhatsApp with the contact via deep link.
+        Step 2: Wait WHATSAPP_LOAD_WAIT for the window to load.
+        Step 3: Check for active call; cancel if found.
+        Step 4: Wait SAFE_CLICK_DELAY.
+        Step 5: Find message input box.
+        Step 6: Click input, type message, press Enter.
+        Step 7: Fall back to pywhatkit web method on any failure.
+
+        Returns True on success, False on failure.
+        """
+        import urllib.parse as _up
+
+        for attempt in range(1, MAX_RETRY_ATTEMPTS + 1):
+            self._log.info("safe_send_message attempt %d/%d to %s", attempt, MAX_RETRY_ATTEMPTS, phone_number)
+            try:
+                import pyautogui
+                import pyperclip
+            except ImportError:
+                self._log.warning("pyautogui/pyperclip not available — falling back to web")
+                return self._web_fallback(phone_number, message)
+
+            try:
+                # Step 1 — open WhatsApp deep link to the contact
+                encoded = _up.quote(message)
+                target = f"whatsapp://send?phone={phone_number}&text={encoded}"
+                subprocess.Popen(
+                    ["cmd", "/c", "start", "", target],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
+                self._log.info("Deep link launched for %s", phone_number)
+
+                # Step 2 — wait for window
+                time.sleep(WHATSAPP_LOAD_WAIT)
+
+                # Step 3 — cancel any active call
+                if self.is_call_active():
+                    self._log.warning("Call detected — cancelling before sending message")
+                    self.cancel_active_call()
+
+                # Step 4 — safety pause
+                time.sleep(SAFE_CLICK_DELAY)
+
+                # Step 5 — locate input box
+                input_pos = self.find_message_input_box()
+                if not input_pos:
+                    self._log.warning("Could not find message input box on attempt %d", attempt)
+                    continue
+
+                # Step 6 — click input, paste message, send
+                win = self._get_wa_window()
+                if win:
+                    try:
+                        if getattr(win, "isMinimized", False):
+                            win.restore()
+                        win.activate()
+                        time.sleep(SAFE_CLICK_DELAY)
+                    except Exception:
+                        pass
+
+                pyautogui.click(*input_pos)
+                time.sleep(SAFE_CLICK_DELAY)
+                # Use clipboard paste — safer than pyautogui.write for Unicode
+                pyperclip.copy(message)
+                pyautogui.hotkey("ctrl", "v")
+                time.sleep(0.4)
+                pyautogui.press("enter")
+                self._log.info("safe_send_message: message sent to %s", phone_number)
+                return True
+
+            except Exception as exc:
+                self._log.warning("safe_send_message attempt %d failed: %s", attempt, exc)
+                if attempt < MAX_RETRY_ATTEMPTS:
+                    time.sleep(1.0)
+
+        # Step 7 — web fallback
+        self._log.warning("All desktop attempts failed — using web fallback for %s", phone_number)
+        return self._web_fallback(phone_number, message)
+
+    def _web_fallback(self, phone_number: str, message: str) -> bool:
+        """pywhatkit web fallback — opens wa.me link in default browser."""
+        try:
+            encoded = urllib.parse.quote(message)
+            webbrowser.open(f"https://wa.me/{phone_number}?text={encoded}")
+            self._log.info("Web fallback opened for %s", phone_number)
+            return True
+        except Exception as exc:
+            self._log.error("Web fallback also failed: %s", exc)
+            return False
+
 
 class WhatsAppController:
     def __init__(self, memory=None):
         self._whatsapp_ready = False
         self.memory = memory
+        self._safe_sender = SafeWhatsAppSender()
 
     def _lookup_saved_phone(self, contact: str) -> str:
         contact_clean = (contact or "").lower().strip()
@@ -102,12 +320,15 @@ class WhatsAppController:
 
         phone = self._lookup_saved_phone(contact_clean)
         if phone:
-            threading.Thread(
-                target=self._send_via_desktop_link,
-                args=(phone, message, contact),
-                daemon=True,
-            ).start()
-            return f"Sending WhatsApp message to {contact} in the desktop app, {USER_NAME}."
+            # SafeWhatsAppSender: call-safe primary path.
+            # _send_via_desktop_link is kept as fallback if safe sender fails.
+            def _safe_then_link():
+                ok = self._safe_sender.safe_send_message(phone, message)
+                if not ok:
+                    log.warning("SafeWhatsAppSender failed - retrying with link for %s", contact)
+                    self._send_via_desktop_link(phone, message, contact)
+            threading.Thread(target=_safe_then_link, daemon=True).start()
+            return f"Sending WhatsApp message to {contact} safely, {USER_NAME}."
 
         try:
             import pyautogui  # noqa: F401

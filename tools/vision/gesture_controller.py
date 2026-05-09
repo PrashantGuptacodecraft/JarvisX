@@ -9,7 +9,7 @@ import time
 from tools.vision.gesture_engine import (
     GestureEngine,
     G_CURSOR, G_CLICK, G_RCLICK, G_SCROLL_U, G_SCROLL_D,
-    G_VOL_UP, G_VOL_DN, G_WAKE, G_SHOT, G_NONE,
+    G_VOL_UP, G_VOL_DN, G_WAKE, G_SHOT, G_SHOT_SEL, G_NONE,
 )
 
 log = logging.getLogger("gesture_controller")
@@ -25,6 +25,21 @@ GESTURE_LABELS = {
     G_VOL_DN:   "👎  Volume Down",
     G_WAKE:     "🖐  Wake JARVIS",
     G_SHOT:     "🤘  Screenshot",
+    G_SHOT_SEL: "🤘  Area Screenshot",
+    G_NONE:     "—  No Gesture",
+}
+
+GESTURE_DESCRIPTIONS = {
+    G_CURSOR:   "☝  Index finger",
+    G_CLICK:    "🤏  Pinch (thumb+index)",
+    G_RCLICK:   "☝✌  Index+mid+ring",
+    G_SCROLL_U: "🖐  Open palm (4 fingers)",
+    G_SCROLL_D: "✊  Fist (all closed)",
+    G_VOL_UP:   "👍  Thumb up only",
+    G_VOL_DN:   "👎  Thumb down only",
+    G_SHOT:     "🤘  Rock sign (tap)",
+    G_SHOT_SEL: "🤘  Rock sign (hold 0.6s) → area select",
+    G_WAKE:     "🖐  Palm high",
     G_NONE:     "—  No Gesture",
 }
 
@@ -129,7 +144,13 @@ class GestureController:
                 pyautogui.press("volumedown")
 
             elif gesture == G_SHOT:
+                # Quick tap = Win+Shift+S snip
                 pyautogui.hotkey("win", "shift", "s")
+
+            elif gesture == G_SHOT_SEL:
+                # Region screenshot completed by engine — notify via JARVIS
+                if self.command_queue:
+                    self.command_queue.put("Region screenshot saved to Pictures folder.")
 
             elif gesture == G_WAKE:
                 if self.command_queue:

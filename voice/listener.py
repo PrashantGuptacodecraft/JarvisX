@@ -29,28 +29,18 @@ from config.settings import (
 log = get_logger("listener")
 
 STOP_WORDS = [
-    "sleep jarvis",
-    "stop listening",
-    "goodbye jarvis",
-    "bye jarvis",
-    "go to sleep",
-    "standby mode",
+    "sleep jarvis", "stop listening", "goodbye jarvis",
+    "bye jarvis", "go to sleep", "standby mode",
 ]
 CANCEL_WORDS = ["cancel", "never mind", "forget it", "abort"]
 ALWAYS_ON_WORDS = [
-    "always listen",
-    "always listening mode",
-    "enable always listening",
-    "enable hands free mode",
-    "enable handsfree mode",
-    "continuous listening mode",
+    "always listen", "always listening mode",
+    "enable always listening", "enable hands free mode",
+    "enable handsfree mode", "continuous listening mode",
 ]
 WAKE_MODE_WORDS = [
-    "disable always listening",
-    "disable hands free mode",
-    "disable handsfree mode",
-    "wake word mode",
-    "normal listening mode",
+    "disable always listening", "disable hands free mode",
+    "disable handsfree mode", "wake word mode", "normal listening mode",
 ]
 
 
@@ -77,17 +67,23 @@ class Listener:
         self.backend = "none"
         self._conversation_timer = None
         self._next_retry_at = 0.0
+        self._text_suppress_until = 0.0   # mute mic after user types text
 
         self._wake_words = self._build_wake_words()
         self._init_mic()
 
     def _build_wake_words(self) -> list[str]:
+        # VOICE_WAKE_WORDS is a CSV string from .env e.g. "hello jarvis,jarvis,hey jarvis"
         words = []
-        for phrase in VOICE_WAKE_WORDS:
+        for phrase in VOICE_WAKE_WORDS.split(","):
             clean = phrase.strip().lower()
             if clean and clean not in words:
                 words.append(clean)
-        return sorted(words, key=len, reverse=True)
+        # Always guarantee base wake words are present
+        for w in ["jarvis", "hello jarvis", "hey jarvis", "ok jarvis"]:
+            if w not in words:
+                words.append(w)
+        return sorted(words, key=len, reverse=True)  # longest first for greedy strip
 
     def _init_mic(self):
         try:
@@ -289,8 +285,22 @@ class Listener:
             return
 
         self._cancel_conversation_timer()
+        # Discard noise: fewer than 3 chars is almost always a mic artifact
+        if len(cleaned.replace(" ", "")) < 3:
+            log.debug("Discarded short noise: %r", cleaned)
+            return
         self.command_queue.put(f"__VOICE__:{cleaned}")
         self._status("thinking")
+
+    def _recognize_english(self, audio) -> str:
+        """Single fast English-only recognition call (en-US)."""
+        import speech_recognition as sr
+        try:
+            return self.recognizer.recognize_google(audio, language="en-US").lower().strip()
+        except sr.UnknownValueError:
+            return ""
+        except Exception:
+            return ""
 
     def _listen_once(self, timeout: int, phrase_limit: int) -> str:
         if not self.available or not self.recognizer or not self.mic:
@@ -300,6 +310,10 @@ class Listener:
 
         import speech_recognition as sr
 
+        # Do not capture voice immediately after user typed
+        if time.time() < self._text_suppress_until:
+            return ""
+
         try:
             with self.mic as src:
                 audio = self.recognizer.listen(
@@ -307,7 +321,7 @@ class Listener:
                     timeout=timeout,
                     phrase_time_limit=phrase_limit,
                 )
-            return self.recognizer.recognize_google(audio).lower().strip()
+            return self._recognize_english(audio)
         except (sr.WaitTimeoutError, sr.UnknownValueError):
             return ""
         except Exception as exc:
@@ -321,24 +335,28 @@ class Listener:
             return ""
 
     def _listen_with_sounddevice(self, timeout: int, phrase_limit: int) -> str:
+        # Do not capture voice immediately after user typed — prevents double input
+        if time.time() < self._text_suppress_until:
+            time.sleep(0.1)
+            return ""
         try:
             import numpy as np
             import sounddevice as sd
             import speech_recognition as sr
 
             sample_rate = 16000
-            block_seconds = 0.12
+            block_seconds = 0.08          # smaller block = lower latency
             block_frames = int(sample_rate * block_seconds)
             max_duration = max(1.0, float(phrase_limit if phrase_limit else timeout))
             start_timeout = max(0.8, float(timeout))
-            silence_limit = max(0.28, float(VOICE_SILENCE_SECONDS))
+            silence_limit = max(0.25, float(VOICE_SILENCE_SECONDS))
             max_frames = int(max_duration * sample_rate)
             silence_frames = int(silence_limit * sample_rate)
             threshold = self._sounddevice_threshold()
 
             chunks = []
             pre_roll = []
-            pre_roll_limit = max(1, int(0.24 / block_seconds))
+            pre_roll_limit = max(1, int(0.40 / block_seconds))  # 400ms pre-roll catches word starts
             heard_voice = False
             silent_run = 0
             total_frames = 0
@@ -395,22 +413,29 @@ class Listener:
                 return ""
 
             audio = sr.AudioData(trimmed.tobytes(), sample_rate, 2)
-            return self.recognizer.recognize_google(audio).lower().strip()
+            return self._recognize_english(audio)
         except sr.UnknownValueError:
             return ""
         except Exception as exc:
+            err = str(exc)
+            if "stopped" in err.lower() or "9983" in err or "overflow" in err.lower():
+                # Stream died temporarily (PaErrorCode -9983) — do not kill listener
+                log.warning(f"Sounddevice stream reset (will retry): {exc}")
+                time.sleep(0.3)  # brief pause before next attempt
+                return ""
             log.warning(f"Sounddevice recognition error: {exc}")
             self.available = False
             self.recognizer = None
             self.mic = None
             self.backend = "none"
-            self.last_error = str(exc)
+            self.last_error = err
             self._next_retry_at = time.time() + VOICE_RETRY_SECONDS
             return ""
 
     def _sounddevice_threshold(self) -> int:
         recognizer_threshold = int(getattr(self.recognizer, "energy_threshold", VOICE_ENERGY_THRESHOLD) or VOICE_ENERGY_THRESHOLD)
-        return max(180, int(recognizer_threshold * 0.72))
+        # Use 60% of recognizer threshold — lower = faster activation
+        return max(120, int(recognizer_threshold * 0.60))
 
     @staticmethod
     def _chunk_has_voice(samples, threshold: int) -> bool:
@@ -428,16 +453,17 @@ class Listener:
         if samples is None or len(samples) == 0:
             return None
 
+        # NEVER trim the start - pre-roll already captures word beginnings.
+        # Only trim trailing silence so Google STT does not time out.
         amplitude = np.abs(samples.astype("int32"))
-        threshold = max(VOICE_ENERGY_THRESHOLD, 220)
+        threshold = max(80, int(VOICE_ENERGY_THRESHOLD * 0.40))
         active_indexes = np.where(amplitude > threshold)[0]
         if active_indexes.size == 0:
             return None
 
-        pad = int(0.25 * 16000)
-        start = max(0, int(active_indexes[0]) - pad)
-        end = min(len(samples), int(active_indexes[-1]) + pad)
-        return samples[start:end].astype("int16")
+        tail_pad = int(0.30 * 16000)
+        end = min(len(samples), int(active_indexes[-1]) + tail_pad)
+        return samples[0:end].astype("int16")
 
     def _contains_wake_word(self, text: str) -> bool:
         return any(word in text for word in self._wake_words)
@@ -525,6 +551,13 @@ class Listener:
 
     def inject_text(self, text: str):
         """Allow GUI or terminal text input to follow the same voice mode rules."""
+        # Strip __TEXT__: prefix (typed from GUI — display already done by _on_submit)
+        typed_from_gui = text.startswith("__TEXT__:")
+        if typed_from_gui:
+            text = text[len("__TEXT__:"):].strip()
+            # Suppress microphone for 2s so voice does not fire for same input
+            self._text_suppress_until = time.time() + 2.0
+
         low = text.lower().strip()
         if not low:
             return
@@ -532,12 +565,16 @@ class Listener:
         if self._handle_local_voice_controls(low):
             return
 
+        # Helper: wrap with __TEXT__: prefix if originally typed, else plain
+        def _put(cmd: str):
+            self.command_queue.put(f"__TEXT__:{cmd}" if typed_from_gui else cmd)
+
         voice_open = self.always_listening or self.active_mode
         if not voice_open and self._contains_wake_word(low):
             self.wake(with_callback=True)
             remainder = self._strip_wake_word(low)
             if remainder:
-                self.command_queue.put(remainder)
+                _put(remainder)
                 self._status("thinking")
             self.keep_active()
             return
@@ -547,5 +584,6 @@ class Listener:
             self.keep_active()
             self._status("listening")
             return
-        self.command_queue.put(cleaned)
+        _put(cleaned)
         self._status("thinking")
+

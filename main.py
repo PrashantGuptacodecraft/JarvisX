@@ -113,22 +113,8 @@ def build_jarvis(gui=None, command_queue=None):
 
 
 def boot_message(ai, listener, user_name: str) -> str:
-    issues = []
-    if not ai.providers:
-        issues.append("no working AI provider is configured")
-    if not listener.available:
-        issues.append("voice input is unavailable")
+    return f"Hello {user_name}."
 
-    if issues:
-        return f"JARVIS online in limited mode, {user_name}: " + " and ".join(issues) + "."
-    if VOICE_ALWAYS_ON:
-        mode = "Operator mode is enabled." if OPERATOR_MODE else "Safe mode is enabled."
-        return f"JARVIS online. Always listening mode is active. {mode} {user_name}."
-    return (
-        f"JARVIS online. All systems operational. "
-        f"{'Operator mode is enabled. ' if OPERATOR_MODE else 'Safe mode is enabled. '}"
-        f"Say Hello Jarvis to begin, or say always listen for hands-free mode, {user_name}."
-    )
 
 
 def run_gui():

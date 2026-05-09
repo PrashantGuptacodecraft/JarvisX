@@ -36,6 +36,16 @@ from config.settings import (
 
 log = get_logger("speaker")
 
+
+def _strip_ssml(text: str) -> str:
+    """Strip all XML/SSML tags from text so pyttsx3 speaks plain words only."""
+    import re
+    # Remove all XML tags
+    clean = re.sub(r'<[^>]+>', '', text)
+    # Collapse extra whitespace
+    clean = re.sub(r'\s+', ' ', clean).strip()
+    return clean or text
+
 # ── Voice profiles ────────────────────────────────────────────────────────────
 VOICE_PROFILES = {
     # Primary: warm, expressive Indian-English — best SSML support
@@ -93,10 +103,33 @@ VOICE_PROFILES = {
         "pyttsx3_rate":          168,
         "pyttsx3_voice_keywords": ["zira", "ava", "female"],
     },
+    # Hindi — Swara is Microsoft's best Hindi Neural voice
+    "hindi": {
+        "edge_voice":            "hi-IN-SwaraNeural",
+        "rate":                  "-5%",
+        "pitch":                 "+0Hz",
+        "volume":                "+0%",
+        "ssml_style":            "chat",
+        "ssml_style_degree":     "1.2",
+        "pyttsx3_rate":          155,
+        "pyttsx3_voice_keywords": ["swara", "female", "hindi"],
+    },
+    # Hinglish — NeerjaExpressive handles code-switching naturally
+    "hinglish": {
+        "edge_voice":            "en-IN-NeerjaExpressiveNeural",
+        "rate":                  "-6%",
+        "pitch":                 "+0Hz",
+        "volume":                "+0%",
+        "ssml_style":            "chat",
+        "ssml_style_degree":     "1.3",
+        "pyttsx3_rate":          158,
+        "pyttsx3_voice_keywords": ["neerja", "zira", "female", "hazel"],
+    },
 }
 
 # ── SSML golden-rule helpers ──────────────────────────────────────────────────
 _FILLER_PAUSES = {
+    # English fillers
     "Hmm":    "450ms", "Hmm,":   "450ms",
     "Right":  "350ms", "Right,": "350ms",
     "So":     "300ms", "So,":    "300ms",
@@ -107,6 +140,15 @@ _FILLER_PAUSES = {
     "Okay":   "350ms", "Okay,":  "350ms",
     "OK":     "300ms", "OK,":    "300ms",
     "Actually": "300ms", "Actually,": "300ms",
+    # Hindi / Hinglish fillers
+    "Haan":   "350ms", "Haan,":  "350ms",
+    "Accha":  "400ms", "Accha,": "400ms",
+    "Theek":  "300ms", "Theek,": "300ms",
+    "Dekho":  "300ms", "Dekho,": "300ms",
+    "Suno":   "350ms", "Suno,":  "350ms",
+    "Aur":    "200ms", "Aur,":   "200ms",
+    "Toh":    "250ms", "Toh,":   "250ms",
+    "Matlab": "350ms", "Matlab,":"350ms",
 }
 
 # Words to auto-emphasise when they appear in a sentence (max 1 per sentence)
@@ -118,99 +160,6 @@ _EMPHASIS_WORDS = {
 
 DEFAULT_PROFILE = VOICE_PROFILES["human_girl"]
 
-
-def _humanize_to_ssml(text: str, voice: str, profile: dict) -> str:
-    """
-    Convert plain text to expressive SSML following the golden rules:
-    1. Natural pauses after filler words (Hmm, Right, So, Wait…)
-    2. Subtle pitch drop (-3%) on sentence endings → conclusive, not robotic
-    3. One emphasis word per sentence max
-    4. Express-as style wrapper for NeerjaExpressiveNeural / AriaNeural / JennyNeural
-    5. Mixed prosody — slightly slower for emotional sentences
-    """
-    import re
-
-    style       = profile.get("ssml_style", "chat")
-    style_deg   = profile.get("ssml_style_degree", "1.2")
-    global_rate = profile.get("rate", "-5%")
-
-    # ── Split into sentences ──────────────────────────────────────────────────
-    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
-    ssml_parts = []
-
-    for sent in sentences:
-        sent = sent.strip()
-        if not sent:
-            continue
-
-        tokens    = sent.split()
-        out       = []
-        emph_done = False
-
-        for i, tok in enumerate(tokens):
-            # Rule 1: filler word → insert pause after it
-            if tok in _FILLER_PAUSES:
-                pause = _FILLER_PAUSES[tok]
-                out.append(f'{tok}<break time="{pause}"/>')
-                continue
-
-            # Rule 3: one emphasis per sentence
-            clean = re.sub(r'[^a-z]', '', tok.lower())
-            if not emph_done and clean in _EMPHASIS_WORDS:
-                out.append(f'<emphasis level="moderate">{tok}</emphasis>')
-                emph_done = True
-                continue
-
-            out.append(tok)
-
-        sentence_body = ' '.join(out)
-
-        # Rule 2: subtle pitch drop at sentence end for conclusive sound
-        ends_declarative = sent.endswith('.') or sent.endswith(',')
-        if ends_declarative and len(tokens) > 4:
-            # Wrap last 2 words in slight pitch-down prosody
-            words = sentence_body.rsplit(' ', 2)
-            if len(words) == 3:
-                tail  = ' '.join(words[1:])
-                sentence_body = (
-                    words[0]
-                    + ' <prosody pitch="-3%" rate="-3%">' + tail + '</prosody>'
-                )
-
-        # Rule 4: slow emotive sentences slightly
-        emotive_words = {"sorry", "unfortunately", "afraid", "miss", "love", "care", "please"}
-        if any(w in sent.lower() for w in emotive_words):
-            sentence_body = f'<prosody rate="-8%">{sentence_body}</prosody>'
-
-        ssml_parts.append(sentence_body)
-
-    inner = '  '.join(ssml_parts)
-
-    # ── Wrap in express-as if voice supports it ───────────────────────────────
-    expressive_voices = {
-        "neerjaexpressive", "aria", "jenny", "sonia", "ava",
-        "guy", "davis", "tony", "jane",
-    }
-    voice_key = voice.lower().replace("-", "").replace("neural", "")
-    use_express = any(v in voice_key for v in expressive_voices)
-
-    if use_express:
-        inner = (
-            f'<mstts:express-as style="{style}" styledegree="{style_deg}">'
-            f'{inner}</mstts:express-as>'
-        )
-
-    ssml = (
-        '<speak version="1.0" '
-        'xmlns="http://www.w3.org/2001/10/synthesis" '
-        'xmlns:mstts="https://www.w3.org/2001/mstts" '
-        'xml:lang="en-US">'
-        f'<voice name="{voice}">'
-        f'<prosody rate="{global_rate}">'
-        f'{inner}'
-        '</prosody></voice></speak>'
-    )
-    return ssml
 
 
 class Speaker:
@@ -450,11 +399,11 @@ class Speaker:
                     log.error(f"TTS error ({self.engine}): {exc}")
                     try:
                         if self.engine != "pyttsx3":
-                            self._pyttsx3(text)
+                            self._pyttsx3(_strip_ssml(text))
                         else:
                             raise
                     except Exception:
-                        print(f"\n[JARVIS] {text}\n")
+                        log.warning("All TTS engines failed — text: %s", _strip_ssml(text))
             finally:
                 interrupted = interrupted or self._stop_event.is_set()
                 with self._lock:
@@ -488,19 +437,20 @@ class Speaker:
         if self.engine == "pyttsx3":
             self._pyttsx3(text)
             return
-        print(f"\n[JARVIS] {text}\n")
+        log.warning("No TTS engine available — text: %s", _strip_ssml(text))
 
     def _edge(self, text: str):
-        """Edge TTS with SSML humanisation via golden rules."""
+        """Edge TTS — plain text with native rate/pitch/volume params.
+        No SSML used: avoids XML being read aloud when TTS falls back.
+        """
         import edge_tts
 
-        # Build expressive SSML
-        ssml = _humanize_to_ssml(text, self.edge_voice, self.profile)
+        # Always use plain text — edge-tts handles prosody via native params
+        clean = _strip_ssml(text)   # safety: strip any stray tags
 
         async def _synthesize():
-            # edge_tts.Communicate accepts raw SSML when text starts with <speak
             communicate = edge_tts.Communicate(
-                text=ssml,
+                text=clean,
                 voice=self.edge_voice,
                 rate=self.edge_rate,
                 pitch=self.edge_pitch,
@@ -508,18 +458,7 @@ class Speaker:
             )
             with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as fh:
                 tmp_path = fh.name
-            try:
-                await communicate.save(tmp_path)
-            except Exception:
-                # SSML rejected by server — fall back to plain text
-                communicate = edge_tts.Communicate(
-                    text=text,
-                    voice=self.edge_voice,
-                    rate=self.edge_rate,
-                    pitch=self.edge_pitch,
-                    volume=self.edge_volume,
-                )
-                await communicate.save(tmp_path)
+            await communicate.save(tmp_path)
             return tmp_path
 
         loop = asyncio.new_event_loop()
@@ -567,8 +506,9 @@ class Speaker:
     def _play_with_pygame(self, path: str):
         import pygame
 
-        pygame.mixer.init()
         try:
+            if not pygame.mixer.get_init():
+                pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
             pygame.mixer.music.load(path)
             pygame.mixer.music.play()
             while pygame.mixer.music.get_busy():
@@ -576,9 +516,20 @@ class Speaker:
                     pygame.mixer.music.stop()
                     break
                 pygame.time.Clock().tick(20)
+        except Exception as exc:
+            log.warning("pygame playback failed (%s) — trying sounddevice", exc)
+            try:
+                self._play_with_sounddevice(path)
+            except Exception as exc2:
+                log.error("All audio playback failed: %s", exc2)
         finally:
-            if pygame.mixer.get_init():
-                pygame.mixer.quit()
+            try:
+                if pygame.mixer.get_init():
+                    pygame.mixer.music.stop()
+                    pygame.mixer.quit()
+            except Exception:
+                pass
+
 
     def _play_with_sounddevice(self, path: str):
         import numpy as np
@@ -617,7 +568,9 @@ class Speaker:
                 engine.setProperty("voice", voice.id)
                 break
 
-        engine.say(text)
+        # Always strip SSML/XML tags — pyttsx3 cannot process them
+        clean_text = _strip_ssml(text)
+        engine.say(clean_text)
         engine.startLoop(False)
         try:
             while True:

@@ -1859,11 +1859,13 @@ class JarvisGUI:
         text = self._input_var.get().strip()
         if not text: return
         self._input_var.set("")
+        # Show the ORIGINAL typed text immediately (preserves case & spelling)
+        self._append_user(text)
         if self.listener:
-            self.listener.inject_text(text)
+            # Prefix __TEXT__: so core_loop knows NOT to call add_user_message again
+            self.listener.inject_text("__TEXT__:" + text)
         else:
-            self.command_queue.put(text)
-            self._append_user(text)
+            self.command_queue.put("__TEXT__:" + text)
 
     # ── Lifecycle ─────────────────────────────────────────────
     def _on_close(self):

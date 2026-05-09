@@ -32,25 +32,28 @@ G_VOL_UP    = "VOLUME_UP"
 G_VOL_DN    = "VOLUME_DOWN"
 G_WAKE      = "WAKE_JARVIS"
 G_SHOT      = "SCREENSHOT"
+G_SHOT_SEL  = "SCREENSHOT_SELECT"  # area-select screenshot mode
 G_NONE      = "NONE"
 _G_READY    = "_CLICK_READY"   # internal: two fingers up = armed, not exported
+_G_PINCH    = "_PINCH"         # internal: thumb+index pinch = click
 
 _BASE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 MODEL_PATH = os.path.join(_BASE, "models", "hand_landmarker.task")
 
 # ── Tuning ────────────────────────────────────────────────────────────────────
-SMOOTH_ALPHA     = 0.30    # EMA cursor speed
-DEAD_ZONE        = 6       # px: ignore micro-tremors
-MAX_JUMP         = 130     # px: prevent teleport
-CLICK_COOLDOWN   = 0.55    # seconds between clicks
-POST_CLICK_FREEZE= 0.22    # seconds to freeze cursor after click fires
-PRE_CLICK_FREEZE = 0.10    # seconds to freeze cursor when click detected (before confirm)
-PINCH_THRESH     = 0.075   # normalised thumb-index distance
-CONFIRM_FRAMES   = 4       # non-cursor gesture confirmation frames
-VOL_FRAMES       = 7       # volume confirmation frames
+SMOOTH_ALPHA     = 0.35    # EMA cursor smoothing
+DEAD_ZONE        = 5       # px: ignore micro-tremors
+MAX_JUMP         = 120     # px: prevent teleport
+CLICK_COOLDOWN   = 0.50    # seconds between clicks
+POST_CLICK_FREEZE= 0.18    # seconds to freeze cursor after click fires
+PRE_CLICK_FREEZE = 0.08    # seconds to freeze cursor before confirm
+PINCH_THRESH     = 0.068   # normalised thumb-index distance for pinch click
+CONFIRM_FRAMES   = 3       # non-cursor gesture confirmation frames
+VOL_FRAMES       = 5       # volume confirmation frames (faster response)
 CLICK_FRAMES     = 2       # click fires after 2 consistent frames
-SCROLL_INTERVAL  = 0.08    # seconds between continuous scroll ticks when held
-SCROLL_AMOUNT    = 4       # scroll units per tick
+SCROLL_INTERVAL  = 0.07    # seconds between scroll ticks
+SCROLL_AMOUNT    = 5       # scroll units per tick
+SHOT_SEL_HOLD    = 0.6     # seconds to hold rock-sign to enter screenshot-select mode
 
 
 def _dist(a, b) -> float:
@@ -59,11 +62,16 @@ def _dist(a, b) -> float:
 
 def _classify(lm) -> str:
     """
-    Classify hand landmarks into a gesture.
-    TWO-FINGER CLICK SYSTEM:
-      ☝  index only          = cursor move
-      ✌  index + middle      = CLICK_READY (cursor still moves, click armed)
-      ☝  close middle again  = LEFT CLICK (handled in engine state machine)
+    Gesture classifier — pinch-based click system:
+      ☝  index only              = CURSOR_MOVE
+      🤏  thumb+index pinch      = LEFT_CLICK (most reliable)
+      ✌  index+middle up        = _CLICK_READY (two-finger ready state)
+      ✌→☝ close middle          = LEFT_CLICK  (two-finger fallback)
+      🤘  index+pinky (rock)    = SCREENSHOT_SELECT mode
+      👍  thumb up only         = VOLUME_UP
+      👎  thumb down only       = VOLUME_DOWN
+      🖐  open palm (4 fingers) = SCROLL_UP
+      ✊  fist                  = SCROLL_DOWN
     """
     W = 0
     THUMB_TIP, THUMB_IP    = 4, 3
@@ -100,22 +108,27 @@ def _classify(lm) -> str:
     thumb_up = lm[THUMB_TIP].y < lm[W].y - 0.10
     thumb_dn = lm[THUMB_TIP].y > lm[W].y + 0.05
 
-    # Rock sign = screenshot (must check before fist)
+    # Pinch = thumb tip close to index tip → most reliable click
+    pinch_dist = _dist(lm[THUMB_TIP], lm[IDX_TIP])
+    if pinch_dist < PINCH_THRESH and not mid and not ring and not pinky:
+        return _G_PINCH
+
+    # Rock sign = screenshot-select (index + pinky, others bent)
     if idx and pinky and not mid and not ring:
         return G_SHOT
 
-    # Fist = scroll DOWN (check early, before palm, using reliable bent test)
+    # Fist = scroll DOWN (check early)
     if is_fist:
         return G_SCROLL_D
 
-    # Volume (thumb only, all fingers bent)
+    # Volume (thumb only, all 4 fingers strictly bent — check BEFORE open palm)
     if thumb_up and not idx and not mid and not ring and not pinky:
         return G_VOL_UP
     if thumb_dn and not idx and not mid and not ring and not pinky:
         return G_VOL_DN
 
-    # Open palm = scroll up (4+ fingers extended via MCP test)
-    if sum([idx, mid, ring, pinky]) >= 3:
+    # Open palm = scroll up (all 4 fingers extended)
+    if sum([idx, mid, ring, pinky]) >= 4:
         return G_SCROLL_U
 
     # Right click = index + middle + ring
@@ -163,19 +176,28 @@ class GestureEngine:
         self._init = False
 
         # Click timing & freeze
-        self._last_click      = 0.0
-        self._freeze_until    = 0.0   # hard freeze: no cursor movement
-        self._click_detected_t = 0.0  # when click gesture first seen (pre-freeze)
+        self._last_click       = 0.0
+        self._freeze_until     = 0.0
+        self._click_detected_t = 0.0
 
         # Gesture confirmation buffer
         self._buf: list[str] = []
         self._last_g = G_NONE
 
-        # Two-finger click state: True when index+middle seen (READY)
-        # Drops to G_CURSOR next frame = CLICK fires
+        # Two-finger click state fallback
         self._armed = False
 
-        # Continuous scroll: track last scroll time for repeat-while-held
+        # Pinch click state
+        self._pinch_frames = 0      # consecutive pinch frames seen
+        self._pinch_fired  = False  # did this pinch already fire?
+
+        # Screenshot area-select state
+        self._shot_mode    = False  # True when in area-select mode
+        self._shot_start   = None   # (x,y) screen coords of first corner
+        self._shot_overlay = None   # current drag end point
+        self._rock_since   = 0.0    # time rock-sign first held
+
+        # Continuous scroll
         self._last_scroll = 0.0
 
         # Screen size
@@ -284,37 +306,71 @@ class GestureEngine:
                             lm = result.hand_landmarks[0]
                             gesture = _classify(lm)
 
-                            # ── Cursor anchor logic ───────────────────────
-                            # State machine: _G_READY -> G_CURSOR = CLICK
+                            now_t = time.time()
+                            # ── Screenshot area-select mode ───────────────
+                            if self._shot_mode:
+                                # In select mode: pinch = set corner, move = drag
+                                if gesture == _G_PINCH:
+                                    sx = int(self._sx)
+                                    sy = int(self._sy)
+                                    if self._shot_start is None:
+                                        self._shot_start = (sx, sy)
+                                    else:
+                                        # Second pinch = capture region
+                                        self._do_region_screenshot(
+                                            self._shot_start, (sx, sy))
+                                        self._shot_mode  = False
+                                        self._shot_start = None
+                                elif gesture == G_CURSOR:
+                                    self._update_cursor(lm[8].x, lm[8].y)
+                                    self._shot_overlay = (int(self._sx), int(self._sy))
+                                continue  # skip normal processing in select mode
+
+                            # ── Pinch = left click (most reliable) ────────
+                            if gesture == _G_PINCH:
+                                self._pinch_frames += 1
+                                self._armed = False
+                                if (self._pinch_frames >= 2
+                                        and not self._pinch_fired
+                                        and now_t >= self._freeze_until):
+                                    self._pinch_fired = True
+                                    self._fire(G_CLICK)
+                            else:
+                                # Reset pinch when released
+                                if self._pinch_fired or self._pinch_frames > 0:
+                                    self._pinch_frames = 0
+                                    self._pinch_fired  = False
+
+                            # ── Rock-sign held → enter screenshot select ──
+                            if gesture == G_SHOT:
+                                if self._rock_since == 0.0:
+                                    self._rock_since = now_t
+                                elif now_t - self._rock_since >= SHOT_SEL_HOLD:
+                                    # Held long enough → area-select mode
+                                    self._shot_mode  = True
+                                    self._shot_start = None
+                                    self._rock_since = 0.0
+                                    log.info("Screenshot area-select mode ON")
+                            else:
+                                self._rock_since = 0.0
+
+                            # ── Two-finger armed state (fallback click) ───
                             if gesture == '_CLICK_READY':
-                                # Two fingers up: cursor moves via index+mid midpoint
                                 self._armed = True
-                                if time.time() >= self._freeze_until:
+                                if now_t >= self._freeze_until:
                                     mx = (lm[8].x + lm[12].x) / 2
                                     my = (lm[8].y + lm[12].y) / 2
                                     self._update_cursor(mx, my)
-                                self._click_detected_t = 0.0
                             elif gesture == G_CURSOR:
-                                if self._armed:
-                                    # READY -> CURSOR transition = LEFT CLICK!
+                                if self._armed and now_t >= self._freeze_until:
                                     self._armed = False
-                                    if time.time() >= self._freeze_until:
-                                        self._fire(G_CLICK)
-                                self._click_detected_t = 0.0
-                                if time.time() >= self._freeze_until:
+                                    self._fire(G_CLICK)
+                                elif not self._armed:
+                                    self._armed = False
+                                if now_t >= self._freeze_until:
                                     self._update_cursor(lm[8].x, lm[8].y)
-                            elif gesture == G_CLICK:
-                                self._armed = False
-                                if self._click_detected_t == 0.0:
-                                    self._click_detected_t = time.time()
-                                    self._freeze_until = time.time() + PRE_CLICK_FREEZE
-                                if time.time() < self._freeze_until:
-                                    pass
-                                else:
-                                    self._update_cursor(lm[5].x, lm[5].y)
                             else:
                                 self._armed = False
-                                self._click_detected_t = 0.0
 
                             self._draw_skeleton(frame, lm, w, h)
                     except Exception as e:
@@ -464,14 +520,47 @@ class GestureEngine:
             cv2.circle(frame, pts[tip], 6, (0, 255, 136), -1, cv2.LINE_AA)
         cv2.circle(frame, pts[0], 5, (255, 200, 0), -1, cv2.LINE_AA)
 
+    def _do_region_screenshot(self, p1: tuple, p2: tuple) -> None:
+        """Capture screen region between two corner points and save."""
+        try:
+            import pyautogui, datetime, os
+            x1, y1 = min(p1[0], p2[0]), min(p1[1], p2[1])
+            x2, y2 = max(p1[0], p2[0]), max(p1[1], p2[1])
+            w_r, h_r = max(10, x2-x1), max(10, y2-y1)
+            img = pyautogui.screenshot(region=(x1, y1, w_r, h_r))
+            ts  = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            path = os.path.join(os.path.expanduser("~"), "Pictures",
+                                f"jarvis_region_{ts}.png")
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            img.save(path)
+            log.info("Region screenshot saved: %s", path)
+            self.action_cb(G_SHOT_SEL)  # notify controller
+        except Exception as e:
+            log.error("Region screenshot failed: %s", e)
+
     def _draw_hud(self, frame, gesture: str, w: int, h: int) -> None:
         import cv2
+        # Draw screenshot selection rectangle overlay
+        if self._shot_mode and self._shot_start and self._shot_overlay:
+            # Convert screen coords back to frame coords for display
+            sx0 = int(self._shot_start[0]  / self._sw * w)
+            sy0 = int(self._shot_start[1]  / self._sh * h)
+            sx1 = int(self._shot_overlay[0]/ self._sw * w)
+            sy1 = int(self._shot_overlay[1]/ self._sh * h)
+            cv2.rectangle(frame, (sx0,sy0), (sx1,sy1), (0,255,255), 2)
+            cv2.putText(frame, "PINCH to capture", (10, h-20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,255), 2)
+        if self._shot_mode:
+            cv2.putText(frame, "SELECT MODE", (w//2-70, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,255,255), 2)
+
         COLOR = {
             G_CURSOR: (0, 212, 255), G_CLICK: (0, 255, 100),
             G_RCLICK: (255, 180, 0), G_SCROLL_U: (100, 255, 100),
             G_SCROLL_D: (100, 100, 255), G_VOL_UP: (200, 255, 200),
             G_VOL_DN: (200, 200, 255), G_SHOT: (255, 80, 200),
-            G_WAKE: (255, 200, 0),
+            G_SHOT_SEL: (0, 255, 255), G_WAKE: (255, 200, 0),
+            _G_PINCH: (0, 255, 50),
         }.get(gesture, (80, 80, 80))
 
         label = gesture.replace("_", " ")

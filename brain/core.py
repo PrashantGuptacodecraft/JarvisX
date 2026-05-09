@@ -33,7 +33,7 @@ INTENTS = {
     "open_website":   ["go to ", "open website", "visit ", "navigate to"],
     "open_gmail":     ["open gmail", "check gmail", "my email", "open mail", "check mail"],
     "open_github":    ["open github", "go to github"],
-    "open_whatsapp_web": ["open whatsapp", "whatsapp web"],
+    "open_whatsapp_web": ["open whatsapp", "whatsapp web", "atsapp"],
     "add_whatsapp_contact": ["add whatsapp contact", "save whatsapp contact", "remember whatsapp contact"],
     "list_whatsapp_contacts": ["list whatsapp contacts", "show whatsapp contacts", "my whatsapp contacts"],
     "save_profile": ["remember profile", "save profile", "my profile is"],
@@ -344,10 +344,13 @@ class Brain:
     def _looks_like_comfort_request(self, low: str) -> bool:
         phrases = [
             "not feeling good",
+            "not feeling well",
+            "not feel good",
             "don't feeling good",
             "dont feeling good",
             "don't feel good",
             "dont feel good",
+            "not well",
             "feeling low",
             "feeling sad",
             "i am sad",
@@ -356,15 +359,26 @@ class Brain:
             "i'm stressed",
             "i am anxious",
             "i'm anxious",
+            # Clipped/partial STT variants
+            "eling good",   # "not f-eling good" clipped
+            "eeling good",
+            "ot feeling",
         ]
+        # Check explicit negative + feeling combo
+        if ("not" in low or "nt" in low) and ("feel" in low or "eel" in low):
+            return True
         return any(phrase in low for phrase in phrases)
 
     def _looks_like_whatsapp_call(self, low: str) -> bool:
-        if "call" not in low:
+        # Also match STT-clipped variants: "l annu" = "call annu", "all annu"
+        has_call = ("call" in low or low.startswith("l ") or low.startswith("all ")
+                    or " call" in low or low.startswith("ll "))
+        if not has_call:
             return False
         if any(w in low for w in ["email", "mail", "gmail", "meeting", "recall"]):
             return False
-        return any(w in low for w in ["whatsapp", "video call", "voice call", "audio call", "call him", "call her", "call them"]) or len(low.split()) <= 4
+        return any(w in low for w in ["whatsapp", "video call", "voice call", "audio call",
+                                       "call him", "call her", "call them"]) or len(low.split()) <= 4
 
     def _looks_like_site_search(self, low: str) -> bool:
         if "search youtube" in low or "youtube search" in low or "find on youtube" in low:
@@ -658,11 +672,110 @@ class Brain:
 
         return "", ""
 
+    # ── Stop-words that should never be part of a contact name ──────────────
+    _CONTACT_STOP_WORDS = re.compile(
+        r'^(?:'
+        # action verbs
+        r'send|message|measage|text|whatsapp|tell|say|call|msg|'
+        # prepositions / articles
+        r'to|for|a|an|the|my|that|about|'
+        # fillers
+        r'saying|says|wrote|write|asking|telling|inform|inform'
+        r')$',
+        re.IGNORECASE,
+    )
+
     def _clean_contact_name(self, value: str) -> str:
+        """Strip WhatsApp suffixes and return title-cased contact name."""
         contact = (value or "").strip()
-        contact = re.sub(r'\b(?:on whatsapp|in whatsapp|using whatsapp|on wa|on whats app)\b', "", contact, flags=re.IGNORECASE)
-        contact = re.sub(r'\s+', " ", contact).strip(" ,.-")
+        # Remove WhatsApp platform qualifiers
+        contact = re.sub(
+            r'\b(?:on whatsapp|in whatsapp|using whatsapp|on wa|on whats app)\b',
+            "", contact, flags=re.IGNORECASE,
+        )
+        # Strip leading/trailing stop-words token by token
+        tokens = contact.split()
+        while tokens and self._CONTACT_STOP_WORDS.match(tokens[0]):
+            tokens.pop(0)
+        while tokens and self._CONTACT_STOP_WORDS.match(tokens[-1]):
+            tokens.pop()
+        contact = " ".join(tokens).strip(" ,.-")
         return contact.title()
+
+    def extract_contact_name(self, raw: str) -> str:
+        """Extract only the contact name from a full voice command string.
+
+        Handles all forms:
+          - "send message hiii to abhishek"
+          - "tell abhishek that I am coming"
+          - "message good morning to mom"
+          - "whatsapp hey there to dad"
+          - "send hiii to my friend rahul"
+          - "message to rahul saying hello"
+        """
+        text = (raw or "").strip()
+        low  = text.lower()
+
+        # Pattern 1: VERB [to] CONTACT (that|saying|:|-) MESSAGE
+        # e.g. "tell abhishek that I am coming" / "message to rahul saying hello"
+        m = re.search(
+            r'\b(?:tell|message|measage|whatsapp|text|msg)\s+(?:to\s+)?(\w[\w ]{0,28}?)'
+            r'\s+(?:that|saying|says|tell(?:ing)?|:|-)',
+            low,
+        )
+        if m:
+            return self._clean_contact_name(m.group(1))
+
+        # Pattern 2: send MESSAGE to CONTACT  (message-first, to-delimited)
+        # e.g. "send message hiii to abhishek"  /  "send hiii to my friend rahul"
+        m = re.search(
+            r'\b(?:send\s+(?:whatsapp\s+)?(?:message|measage)?|message|measage|whatsapp)'
+            r'\s+.+?\bto\s+(?:my\s+(?:friend|best friend|brother|sister|boss)?\s*)?(\w[\w ]{0,24}?)\s*$',
+            low,
+        )
+        if m:
+            return self._clean_contact_name(m.group(1))
+
+        # Pattern 3: plain "to CONTACT" anywhere
+        m = re.search(r'\bto\s+(?:my\s+)?([a-z][a-z ]{0,24}?)(?:\s+(?:saying|that|:)|$)', low)
+        if m:
+            candidate = m.group(1).strip()
+            if not self._CONTACT_STOP_WORDS.match(candidate):
+                return self._clean_contact_name(candidate)
+
+        # Pattern 4: VERB CONTACT MESSAGE with no connector — take word after verb
+        m = re.search(
+            r'^(?:message|measage|text|msg|whatsapp)\s+(\w+)(?:\s+.+)?$', low
+        )
+        if m:
+            return self._clean_contact_name(m.group(1))
+
+        # Fallback: try resolving any token against saved contacts
+        for token in low.split():
+            resolved = self._resolve_whatsapp_contact_name(token)
+            if resolved:
+                return resolved
+        return ""
+
+    def extract_message_content(self, raw: str, contact_name: str) -> str:
+        """Return only the message part once the contact name is known."""
+        text = (raw or "").strip()
+        low  = text.lower()
+        contact_low = (contact_name or "").lower().strip()
+
+        # Remove the contact name from the text
+        if contact_low:
+            text = re.sub(re.escape(contact_low), "", text, flags=re.IGNORECASE).strip()
+
+        # Strip leading action verbs and connectors
+        text = re.sub(
+            r'^(?:please\s+)?(?:send\s+)?(?:whatsapp\s+)?(?:message|measage|text|msg|tell|say)\s+',
+            "", text, flags=re.IGNORECASE,
+        ).strip()
+        # Strip "to", "saying", "that" at the start
+        text = re.sub(r'^(?:to|saying|that|:|-)?\s*', "", text, flags=re.IGNORECASE).strip()
+        return text.strip(" ,.-")
+
 
     def _extract_params(self, intent: str, low: str, original: str) -> dict:
         p = {"raw": original}
@@ -751,6 +864,12 @@ class Brain:
                 if contact_guess:
                     p["contact"] = contact_guess
                     p["message"] = message_guess
+                else:
+                    # Use new extract_contact_name for unstructured commands
+                    extracted = self.extract_contact_name(original)
+                    if extracted:
+                        p["contact"] = extracted
+                        p["message"] = self.extract_message_content(original, extracted)
             if not p.get("contact") or not p.get("message"):
                 tokens = re.split(r'\b(?:message|measage|text|msg|whatsapp|send)\b', original, flags=re.IGNORECASE)
                 cleaned = " ".join(t.strip() for t in tokens if t.strip()).strip()

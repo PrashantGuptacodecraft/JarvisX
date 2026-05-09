@@ -89,6 +89,15 @@ RESPONSE FORMAT:
 - Questions: answer directly, add relevant context if it helps.
 - Errors: explain briefly and offer a workaround immediately.
 - Casual chat: be warm and present, like a trusted friend who happens to be brilliant.
+- If input is a NAME or PERSON: search your knowledge and answer about that person directly.
+- If you don't know something: say "I'm not sure about that" in one sentence. Do NOT speculate about typos or speech recognition errors.
+- NEVER comment on typos or repeated words.
+- NEVER ask the user to confirm names or check for typos — just answer what was asked.
+- NEVER write long explanations for short questions. Match reply length to question length.
+- If input seems ambiguous or incomplete (e.g. "eling good", "ot well"), ask ONE short clarifying question instead of assuming meaning.
+- NEVER interpret an unclear input as positive if it might be negative. When unsure, ask.
+- NEVER mention internal system things like voice profiles, TTS engines, SSML, rate settings, or modules.
+- Always respond in English.
 """
 
 
@@ -233,7 +242,7 @@ class AIClient:
             composed_context = f"{composed_context}\n\n{voice_hint}".strip() if composed_context else voice_hint
 
         full_msg = f"{composed_context}\n\n{user_message}" if composed_context else user_message
-        history_limit = 12 if voice_mode else 24
+        history_limit = 6 if voice_mode else 14   # shorter = less stale context
         max_tokens = VOICE_RESPONSE_MAX_TOKENS if voice_mode else 600
         last_error = None
 
