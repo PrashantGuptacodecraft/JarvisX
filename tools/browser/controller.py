@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import subprocess
+import sys
 import time
 import urllib.parse
 import urllib.request
@@ -14,6 +17,7 @@ from config.logger import get_logger
 from config.settings import USER_NAME
 
 log = get_logger("browser")
+IS_WIN = sys.platform == "win32"
 
 SITES = {
     "gmail": "https://mail.google.com",
@@ -23,6 +27,10 @@ SITES = {
     "youtube": "https://youtube.com",
     "google": "https://google.com",
     "netflix": "https://netflix.com",
+    "hotstar": "https://www.hotstar.com",
+    "jiohotstar": "https://www.hotstar.com",
+    "jio hotstar": "https://www.hotstar.com",
+    "disney hotstar": "https://www.hotstar.com",
     "twitter": "https://twitter.com",
     "instagram": "https://instagram.com",
     "reddit": "https://reddit.com",
@@ -64,21 +72,113 @@ SEARCH_SITE_ALIASES = {
 
 
 class BrowserController:
+    def _open_in_chrome(self, target: str) -> bool:
+        if not IS_WIN:
+            return False
+
+        candidates = []
+        for env_name in ("ProgramFiles", "ProgramFiles(x86)", "LocalAppData"):
+            base = os.environ.get(env_name, "").strip()
+            if base:
+                candidates.append(os.path.join(base, "Google", "Chrome", "Application", "chrome.exe"))
+        candidates.extend(["chrome", "chrome.exe"])
+
+        seen = set()
+        for executable in candidates:
+            key = executable.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                subprocess.Popen(
+                    [executable, target],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                return True
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                log.warning(f"Chrome launch failed for {target} via {executable}: {exc}")
+            except Exception as exc:
+                log.warning(f"Unexpected Chrome launch error for {target} via {executable}: {exc}")
+        return False
+
+    def _resolve_open_target(self, url_or_name: str) -> tuple[str, str, bool]:
+        raw = (url_or_name or "").strip()
+        key = raw.lower()
+        if not raw:
+            return "", "", False
+
+        if key in SITES:
+            return SITES[key], raw, False
+
+        compact = re.sub(r"\s+", "", key)
+        if compact in SITES:
+            return SITES[compact], raw, False
+
+        if raw.startswith(("http://", "https://")):
+            return raw, raw, False
+
+        if re.fullmatch(r"[A-Za-z0-9-]+\.[A-Za-z]{2,}([/?#].*)?", raw):
+            return "https://" + raw, raw, False
+
+        if " " not in raw and re.fullmatch(r"[A-Za-z0-9-]+", raw):
+            return f"https://www.{compact}.com", raw, False
+
+        search_url = "https://www.google.com/search?q=" + urllib.parse.quote(raw)
+        return search_url, raw, True
+
+    def _open_browser_target(self, url: str, new: int = 0) -> bool:
+        target = (url or "").strip()
+        if not target:
+            return False
+
+        if IS_WIN:
+            if self._open_in_chrome(target):
+                return True
+            try:
+                os.startfile(target)
+                return True
+            except OSError as exc:
+                log.warning(f"Windows browser open via startfile failed for {target}: {exc}")
+
+            try:
+                subprocess.Popen(
+                    ["rundll32", "url.dll,FileProtocolHandler", target],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                return True
+            except Exception as exc:
+                log.warning(f"Windows browser open via rundll32 failed for {target}: {exc}")
+
+        try:
+            opened = webbrowser.open(target, new=new)
+            if not opened:
+                log.warning(f"webbrowser.open returned False for {target}")
+            return opened
+        except Exception as exc:
+            log.warning(f"Browser open failed for {target}: {exc}")
+            return False
+
     def search_google(self, query: str) -> str:
         if not query:
             return f"What should I search, {USER_NAME}?"
-        webbrowser.open(
-            "https://www.google.com/search?q=" + urllib.parse.quote(query)
-        )
+        url = "https://www.google.com/search?q=" + urllib.parse.quote(query)
+        if not self._open_browser_target(url):
+            return f"I couldn't open Google search for '{query}', {USER_NAME}."
         return f"Searching Google for '{query}'."
 
     def search_youtube(self, query: str) -> str:
         if not query:
             return f"What should I search on YouTube, {USER_NAME}?"
-        webbrowser.open(
+        url = (
             "https://www.youtube.com/results?search_query="
             + urllib.parse.quote(query)
         )
+        if not self._open_browser_target(url):
+            return f"I couldn't open YouTube search for '{query}', {USER_NAME}."
         return f"Searching YouTube for '{query}', {USER_NAME}."
 
     def search_website(self, site: str, query: str) -> str:
@@ -90,7 +190,9 @@ class BrowserController:
 
         template = SEARCH_URLS.get(site_key)
         if template:
-            webbrowser.open(template.format(query=urllib.parse.quote(query)))
+            url = template.format(query=urllib.parse.quote(query))
+            if not self._open_browser_target(url):
+                return f"I couldn't open {site_key.capitalize()} search for '{query}', {USER_NAME}."
             return f"Searching {site_key.capitalize()} for '{query}', {USER_NAME}."
 
         if site_key in SITES:
@@ -105,7 +207,8 @@ class BrowserController:
 
         video = self._resolve_youtube_video(query=query, channel_name=channel)
         if video:
-            webbrowser.open(video["url"])
+            if not self._open_browser_target(video["url"]):
+                return f"I couldn't open YouTube for '{video['title']}', {USER_NAME}."
             suffix = f" from {video['channel']}" if video.get("channel") else ""
             return (
                 f"Playing '{video['title']}'{suffix} on YouTube, {USER_NAME}."
@@ -120,7 +223,8 @@ class BrowserController:
 
         match = self._resolve_youtube_channel(channel)
         if match:
-            webbrowser.open(match["url"])
+            if not self._open_browser_target(match["url"]):
+                return f"I couldn't open the YouTube channel '{match['title']}', {USER_NAME}."
             return f"Opening the YouTube channel '{match['title']}', {USER_NAME}."
 
         url = (
@@ -129,7 +233,8 @@ class BrowserController:
             + "&sp="
             + YOUTUBE_CHANNEL_FILTER
         )
-        webbrowser.open(url)
+        if not self._open_browser_target(url):
+            return f"I couldn't open YouTube channel results for '{channel}', {USER_NAME}."
         return (
             f"I opened YouTube channel search results for '{channel}', {USER_NAME}."
         )
@@ -145,7 +250,8 @@ class BrowserController:
 
         channel_match = self._resolve_youtube_channel(channel)
         if channel_match:
-            webbrowser.open(channel_match["url"])
+            if not self._open_browser_target(channel_match["url"]):
+                return f"I couldn't open {channel_match['title']} on YouTube, {USER_NAME}."
             time.sleep(1.0)
             video = self._resolve_youtube_video(
                 query=video_query,
@@ -154,13 +260,16 @@ class BrowserController:
                 prefer_latest=prefer_latest,
             )
             if video:
-                webbrowser.open(video["url"])
+                if not self._open_browser_target(video["url"]):
+                    return f"I couldn't open '{video['title']}' on YouTube, {USER_NAME}."
                 return (
                     f"Opening {channel_match['title']} and playing "
                     f"'{video['title']}', {USER_NAME}."
                 )
 
-            webbrowser.open(channel_match["url"].rstrip("/") + "/videos")
+            videos_url = channel_match["url"].rstrip("/") + "/videos"
+            if not self._open_browser_target(videos_url):
+                return f"I couldn't open {channel_match['title']}'s videos tab, {USER_NAME}."
             if video_query:
                 return (
                     f"I opened {channel_match['title']} and its videos tab, "
@@ -251,7 +360,8 @@ class BrowserController:
         if channel:
             channel_match = self._resolve_youtube_channel(channel)
             if channel_match:
-                webbrowser.open(channel_match["url"])
+                if not self._open_browser_target(channel_match["url"]):
+                    return f"I couldn't open the channel '{channel_match['title']}', {USER_NAME}."
                 actions.append(f"Opened channel '{channel_match['title']}'.")
             else:
                 url = (
@@ -260,7 +370,8 @@ class BrowserController:
                     + "&sp="
                     + YOUTUBE_CHANNEL_FILTER
                 )
-                webbrowser.open(url)
+                if not self._open_browser_target(url):
+                    return f"I couldn't open YouTube channel results for '{channel}', {USER_NAME}."
                 actions.append(f"Opened channel results for '{channel}'.")
 
         video_query = video_query.strip()
@@ -273,13 +384,16 @@ class BrowserController:
         )
         if video:
             time.sleep(1.0)
-            webbrowser.open(video["url"])
+            if not self._open_browser_target(video["url"]):
+                return f"I couldn't open '{video['title']}' on YouTube, {USER_NAME}."
             actions.append(f"Playing '{video['title']}'.")
         elif not channel and lookup_query:
             self.search_youtube(lookup_query)
             actions.append(f"Opened YouTube search for '{lookup_query}'.")
         elif channel_match:
-            webbrowser.open(channel_match["url"].rstrip("/") + "/videos")
+            videos_url = channel_match["url"].rstrip("/") + "/videos"
+            if not self._open_browser_target(videos_url):
+                return f"I couldn't open the channel videos tab for '{channel_match['title']}', {USER_NAME}."
             actions.append("Opened the channel videos tab.")
 
         if comment:
@@ -290,14 +404,14 @@ class BrowserController:
         return " ".join(actions)
 
     def open_url(self, url_or_name: str) -> str:
-        key = url_or_name.lower().strip()
-        if key in SITES:
-            webbrowser.open(SITES[key])
-            return f"Opening {key.capitalize()}, {USER_NAME}."
-        if not url_or_name.startswith("http"):
-            url_or_name = "https://" + url_or_name
-        webbrowser.open(url_or_name)
-        return f"Opening {url_or_name}, {USER_NAME}."
+        url, label, is_search = self._resolve_open_target(url_or_name)
+        if not url:
+            return f"What should I open, {USER_NAME}?"
+        if not self._open_browser_target(url):
+            return f"I couldn't open {label or url_or_name}, {USER_NAME}."
+        if is_search:
+            return f"Searching for {label}, {USER_NAME}."
+        return f"Opening {label or url_or_name}, {USER_NAME}."
 
     def compose_gmail(self, to: str = "", subject: str = "", body: str = "") -> str:
         params = {}
@@ -311,7 +425,8 @@ class BrowserController:
         params["fs"] = "1"
 
         url = "https://mail.google.com/mail/?" + urllib.parse.urlencode(params)
-        webbrowser.open(url)
+        if not self._open_browser_target(url):
+            return f"I couldn't open Gmail compose, {USER_NAME}."
 
         parts = []
         if to:
@@ -387,7 +502,8 @@ class BrowserController:
         )
 
     def open_gmail(self) -> str:
-        webbrowser.open(SITES["gmail"])
+        if not self._open_browser_target(SITES["gmail"]):
+            return f"I couldn't open Gmail, {USER_NAME}."
         return f"Opening Gmail, {USER_NAME}."
 
     def _normalize_site(self, site: str) -> str:

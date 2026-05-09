@@ -25,11 +25,16 @@ CONTACT_NUMBERS = {
 }
 
 WINDOW_TITLES = ["WhatsApp", "WhatsApp Beta"]
+CALL_BUTTON_AVOID_REGIONS = [
+    (0.72, 0.00, 1.00, 0.18),
+]
 
 # ── SafeWhatsAppSender constants ──────────────────────────────────────────────
 SAFE_CLICK_DELAY    = 0.5    # seconds between automation actions
 WHATSAPP_LOAD_WAIT  = 3.0    # seconds to wait after opening WhatsApp
 MAX_RETRY_ATTEMPTS  = 3      # max retries for safe_send_message
+SEARCH_RESULT_WAIT  = 2.5    # allow filtered search rows time to render
+SEARCH_RESULT_POLL  = 0.25   # check interval while waiting for search rows
 
 
 class SafeWhatsAppSender:
@@ -41,13 +46,16 @@ class SafeWhatsAppSender:
     and it will fall back to pywhatkit web method on any failure.
     """
 
-    def __init__(self):
+    def __init__(self, controller=None):
+        self._controller = controller
         self._log = get_logger("whatsapp.safe")
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 
     def _get_wa_window(self):
         """Return the largest visible WhatsApp window, or None."""
+        if self._controller:
+            return self._controller._get_whatsapp_window() or self._controller._get_active_window()
         try:
             import pygetwindow as gw
         except ImportError:
@@ -59,6 +67,17 @@ class SafeWhatsAppSender:
         if not visible:
             return None
         return max(visible, key=lambda w: w.width * w.height)
+
+    def _point_is_safe(self, win, point: tuple[int, int]) -> bool:
+        x, y = point
+        for x0, y0, x1, y1 in CALL_BUTTON_AVOID_REGIONS:
+            left = win.left + int(win.width * x0)
+            top = win.top + int(win.height * y0)
+            right = win.left + int(win.width * x1)
+            bottom = win.top + int(win.height * y1)
+            if left <= x <= right and top <= y <= bottom:
+                return False
+        return True
 
     def _window_title(self) -> str:
         """Return the current active window title (lowercase)."""
@@ -140,16 +159,19 @@ class SafeWhatsAppSender:
         if not win:
             return None
         try:
-            # Input box is at ~50% width, ~93% height of the WhatsApp window
+            # Input box is at ~50% width, ~92% height of the WhatsApp window.
             x = win.left + int(win.width * 0.50)
-            y = win.top  + int(win.height * 0.93)
+            y = win.top  + int(win.height * 0.92)
+            if not self._point_is_safe(win, (x, y)):
+                self._log.warning("Refusing to use an unsafe WhatsApp click point at (%d, %d)", x, y)
+                return None
             self._log.debug("Message input box estimated at (%d, %d)", x, y)
             return x, y
         except Exception as exc:
             self._log.warning("find_message_input_box failed: %s", exc)
             return None
 
-    def safe_send_message(self, phone_number: str, message: str) -> bool:
+    def safe_send_message(self, phone_number: str, message: str, contact: str = "") -> bool:
         """
         Send a WhatsApp message safely, avoiding call button areas.
 
@@ -163,37 +185,47 @@ class SafeWhatsAppSender:
 
         Returns True on success, False on failure.
         """
-        import urllib.parse as _up
+        clean_phone = "".join(ch for ch in (phone_number or "") if ch.isdigit())
+        if not clean_phone or not message:
+            return False
 
         for attempt in range(1, MAX_RETRY_ATTEMPTS + 1):
-            self._log.info("safe_send_message attempt %d/%d to %s", attempt, MAX_RETRY_ATTEMPTS, phone_number)
+            self._log.info("safe_send_message attempt %d/%d to %s", attempt, MAX_RETRY_ATTEMPTS, clean_phone)
             try:
                 import pyautogui
                 import pyperclip
             except ImportError:
                 self._log.warning("pyautogui/pyperclip not available — falling back to web")
-                return self._web_fallback(phone_number, message)
+                return self._web_fallback(clean_phone, message)
 
             try:
                 # Step 1 — open WhatsApp deep link to the contact
-                encoded = _up.quote(message)
-                target = f"whatsapp://send?phone={phone_number}&text={encoded}"
-                subprocess.Popen(
-                    ["cmd", "/c", "start", "", target],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                )
-                self._log.info("Deep link launched for %s", phone_number)
+                if self._controller and contact:
+                    if not self._controller._open_contact_chat(contact, clean_phone):
+                        raise RuntimeError(f"Could not open the WhatsApp chat for {contact}")
+                else:
+                    target = f"whatsapp://send?phone={clean_phone}"
+                    subprocess.Popen(
+                        ["cmd", "/c", "start", "", target],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    )
+                    self._log.info("Deep link launched for %s", clean_phone)
 
                 # Step 2 — wait for window
                 time.sleep(WHATSAPP_LOAD_WAIT)
+                if self._controller and contact and not self._controller._current_chat_matches(contact):
+                    raise RuntimeError(f"WhatsApp did not open the correct chat for {contact}")
 
                 # Step 3 — cancel any active call
                 if self.is_call_active():
                     self._log.warning("Call detected — cancelling before sending message")
-                    self.cancel_active_call()
+                    if not self.cancel_active_call():
+                        raise RuntimeError("An active WhatsApp call could not be cancelled")
 
                 # Step 4 — safety pause
                 time.sleep(SAFE_CLICK_DELAY)
+                if self._controller and contact and not self._controller._current_chat_matches(contact):
+                    raise RuntimeError(f"Target chat is not active before sending to {contact}")
 
                 # Step 5 — locate input box
                 input_pos = self.find_message_input_box()
@@ -204,6 +236,8 @@ class SafeWhatsAppSender:
                 # Step 6 — click input, paste message, send
                 win = self._get_wa_window()
                 if win:
+                    if not self._point_is_safe(win, input_pos):
+                        raise RuntimeError("Refusing to click an unsafe area inside WhatsApp")
                     try:
                         if getattr(win, "isMinimized", False):
                             win.restore()
@@ -214,12 +248,14 @@ class SafeWhatsAppSender:
 
                 pyautogui.click(*input_pos)
                 time.sleep(SAFE_CLICK_DELAY)
+                if self._controller and contact and not self._controller._current_chat_matches(contact):
+                    raise RuntimeError(f"Target chat focus was lost before sending to {contact}")
                 # Use clipboard paste — safer than pyautogui.write for Unicode
                 pyperclip.copy(message)
                 pyautogui.hotkey("ctrl", "v")
                 time.sleep(0.4)
                 pyautogui.press("enter")
-                self._log.info("safe_send_message: message sent to %s", phone_number)
+                self._log.info("safe_send_message: message sent to %s", clean_phone)
                 return True
 
             except Exception as exc:
@@ -228,8 +264,8 @@ class SafeWhatsAppSender:
                     time.sleep(1.0)
 
         # Step 7 — web fallback
-        self._log.warning("All desktop attempts failed — using web fallback for %s", phone_number)
-        return self._web_fallback(phone_number, message)
+        self._log.warning("All desktop attempts failed — using web fallback for %s", clean_phone)
+        return self._web_fallback(clean_phone, message)
 
     def _web_fallback(self, phone_number: str, message: str) -> bool:
         """pywhatkit web fallback — opens wa.me link in default browser."""
@@ -247,7 +283,8 @@ class WhatsAppController:
     def __init__(self, memory=None):
         self._whatsapp_ready = False
         self.memory = memory
-        self._safe_sender = SafeWhatsAppSender()
+        self._safe_sender = SafeWhatsAppSender(self)
+        self._ui_automation_unavailable = False
 
     def _lookup_saved_phone(self, contact: str) -> str:
         contact_clean = (contact or "").lower().strip()
@@ -311,6 +348,16 @@ class WhatsAppController:
                 deduped.append(clean)
         return deduped
 
+    def _can_assume_chat_opened(self, contact: str, query: str, source: str) -> bool:
+        contact_norm = self._normalize_label(contact)
+        query_norm = self._normalize_label(query)
+        if not contact_norm or query_norm != contact_norm:
+            return False
+        if not self._header_has_call_controls():
+            return False
+        log.info(f"Assuming WhatsApp chat is open for {contact} after {source} '{query}'")
+        return True
+
     def send_message(self, contact: str, message: str) -> str:
         if not contact or not message:
             return f"Please provide both a contact name and a message, {USER_NAME}."
@@ -323,7 +370,7 @@ class WhatsAppController:
             # SafeWhatsAppSender: call-safe primary path.
             # _send_via_desktop_link is kept as fallback if safe sender fails.
             def _safe_then_link():
-                ok = self._safe_sender.safe_send_message(phone, message)
+                ok = self._safe_sender.safe_send_message(phone, message, contact=contact)
                 if not ok:
                     log.warning("SafeWhatsAppSender failed - retrying with link for %s", contact)
                     self._send_via_desktop_link(phone, message, contact)
@@ -374,9 +421,16 @@ class WhatsAppController:
         encoded = urllib.parse.quote(message)
         if self._open_desktop_link(phone, encoded):
             if self._focus_whatsapp_window(wait_seconds=8):
-                self._press_enter_after_delay(1)
-                log.info(f"Sent desktop deep-link message to {contact}")
-                return
+                time.sleep(WHATSAPP_LOAD_WAIT)
+                if self._current_chat_matches(contact):
+                    self._press_enter_after_delay(1)
+                    log.info(f"Sent desktop deep-link message to {contact}")
+                    return
+                log.warning(f"Desktop deep link did not confirm the chat for {contact}; retrying with search")
+
+        if self._open_contact_chat(contact, phone):
+            self._send_via_desktop_search(contact, message)
+            return
 
         log.warning("Desktop deep link failed - falling back to WhatsApp Web link")
         self._send_via_web_link(phone, message, contact)
@@ -393,6 +447,11 @@ class WhatsAppController:
             log.warning("Could not open WhatsApp Desktop - falling back to web automation")
             self._send_via_web_search(contact, message)
             return
+
+        input_pos = self._safe_sender.find_message_input_box()
+        if input_pos:
+            pyautogui.click(*input_pos)
+            time.sleep(0.3)
 
         pyperclip.copy(message)
         pyautogui.hotkey("ctrl", "v")
@@ -525,6 +584,134 @@ class WhatsAppController:
         y = win.top + int(win.height * 0.36)
         return x, y
 
+    def _search_result_rows(self, win) -> list:
+        desktop = self._pywinauto_desktop()
+        if not desktop or not win:
+            return []
+
+        try:
+            root = desktop.from_point(
+                win.left + int(win.width * 0.23),
+                win.top + int(win.height * 0.36),
+            ).top_level_parent()
+        except Exception:
+            return []
+
+        left_limit = win.left + int(win.width * 0.03)
+        right_limit = win.left + int(win.width * 0.37)
+        top_limit = win.top + int(win.height * 0.22)
+        bottom_limit = win.top + int(win.height * 0.95)
+
+        rows = []
+        seen = set()
+        for item in root.descendants():
+            control_type = getattr(item.element_info, "control_type", "")
+            if control_type not in ("ListItem", "Button", "Pane"):
+                continue
+            try:
+                rect = item.rectangle()
+            except Exception:
+                continue
+
+            width = rect.right - rect.left
+            height = rect.bottom - rect.top
+            center_x = (rect.left + rect.right) // 2
+            center_y = (rect.top + rect.bottom) // 2
+            if width < 180 or height < 40 or height > 140:
+                continue
+            if center_x < left_limit or center_x > right_limit:
+                continue
+            if center_y < top_limit or center_y > bottom_limit:
+                continue
+
+            signature = (rect.left, rect.top, rect.right, rect.bottom)
+            if signature in seen:
+                continue
+            seen.add(signature)
+            rows.append(item)
+        return rows
+
+    def _row_primary_text(self, row) -> str:
+        texts = []
+        try:
+            row_rect = row.rectangle()
+        except Exception:
+            return ""
+
+        for item in row.descendants():
+            if getattr(item.element_info, "control_type", "") != "Text":
+                continue
+            try:
+                rect = item.rectangle()
+            except Exception:
+                continue
+            text = (item.window_text() or getattr(item.element_info, "name", "") or "").strip()
+            if not text:
+                continue
+            if rect.left < row_rect.left or rect.right > row_rect.right:
+                continue
+            if rect.top < row_rect.top or rect.bottom > row_rect.bottom:
+                continue
+            texts.append((rect.top, rect.left, text))
+
+        if not texts:
+            return ""
+
+        texts.sort(key=lambda row: (row[0], row[1]))
+        return texts[0][2]
+
+    def _click_exact_search_result(self, contact: str, wait_timeout: float = SEARCH_RESULT_WAIT) -> bool:
+        win = self._get_whatsapp_window() or self._get_active_window()
+        if not win:
+            return False
+
+        deadline = time.monotonic() + max(wait_timeout, 0.0)
+        last_visible_labels = []
+
+        while True:
+            rows = self._search_result_rows(win)
+            matching_rows = []
+            visible_labels = []
+            for row in rows:
+                label = self._row_primary_text(row)
+                if not label:
+                    continue
+                visible_labels.append(label)
+                if self._title_matches_contact(label, contact):
+                    matching_rows.append(row)
+
+            if matching_rows:
+                if visible_labels:
+                    log.info("WhatsApp visible search rows: %s", " | ".join(visible_labels[:6]))
+                for row in matching_rows:
+                    try:
+                        row.click_input()
+                        time.sleep(1.0)
+                        if self._current_chat_matches(contact):
+                            log.info(f"Opened WhatsApp chat via exact result row for {contact}")
+                            return True
+                    except Exception:
+                        try:
+                            import pyautogui
+
+                            rect = row.rectangle()
+                            pyautogui.click((rect.left + rect.right) // 2, (rect.top + rect.bottom) // 2)
+                            time.sleep(1.0)
+                            if self._current_chat_matches(contact):
+                                log.info(f"Opened WhatsApp chat via exact result row center for {contact}")
+                                return True
+                        except Exception as e:
+                            log.warning(f"Could not click exact WhatsApp result row for {contact}: {e}")
+                            continue
+                return False
+
+            last_visible_labels = visible_labels
+            if time.monotonic() >= deadline:
+                if last_visible_labels:
+                    log.info("WhatsApp visible search rows: %s", " | ".join(last_visible_labels[:6]))
+                return False
+            time.sleep(SEARCH_RESULT_POLL)
+
     def _open_chat_via_search(self, contact: str, phone: str = "") -> bool:
         import pyautogui
         import pyperclip
@@ -539,7 +726,6 @@ class WhatsAppController:
                 return False
 
             search_x, search_y = self._chat_search_point(win)
-            result_x, result_y = self._first_search_result_point(win)
             for query in queries:
                 pyautogui.press("esc")
                 time.sleep(0.15)
@@ -550,7 +736,11 @@ class WhatsAppController:
                 pyautogui.press("backspace")
                 time.sleep(0.1)
                 pyautogui.write(query, interval=0.04)
-                time.sleep(0.9)
+                time.sleep(0.25)
+                if self._click_exact_search_result(contact):
+                    return True
+                if self._click_first_search_result(win, contact, query, source="typed search"):
+                    return True
                 pyautogui.press("down")
                 time.sleep(0.15)
                 pyautogui.press("enter")
@@ -558,8 +748,7 @@ class WhatsAppController:
                 if self._current_chat_matches(contact):
                     log.info(f"Opened WhatsApp chat via keyboard search for {contact} using query '{query}'")
                     return True
-                if self._header_has_call_controls():
-                    log.info(f"Assuming WhatsApp chat is open for {contact} after keyboard search '{query}'")
+                if self._can_assume_chat_opened(contact, query, source="keyboard search"):
                     return True
 
                 # Fallback to clipboard paste for cases where direct typing is blocked.
@@ -569,14 +758,10 @@ class WhatsAppController:
                 pyautogui.press("backspace")
                 pyperclip.copy(query)
                 pyautogui.hotkey("ctrl", "v")
-                time.sleep(0.9)
-                pyautogui.click(result_x, result_y)
-                time.sleep(1.0)
-                if self._current_chat_matches(contact):
-                    log.info(f"Opened WhatsApp chat via paste search for {contact} using query '{query}'")
+                time.sleep(0.25)
+                if self._click_exact_search_result(contact):
                     return True
-                if self._header_has_call_controls():
-                    log.info(f"Assuming WhatsApp chat is open for {contact} after result click for '{query}'")
+                if self._click_first_search_result(win, contact, query, source="result click"):
                     return True
 
             log.warning(f"WhatsApp search could not confirm the chat for {contact}")
@@ -651,7 +836,18 @@ class WhatsAppController:
         title = self._read_current_chat_title()
         if title:
             log.info("WhatsApp current chat title: %s", title)
-        return self._title_matches_contact(title, contact)
+            return self._title_matches_contact(title, contact)
+
+        try:
+            import pygetwindow as gw
+
+            active_title = gw.getActiveWindowTitle() or ""
+        except Exception:
+            active_title = ""
+
+        if active_title:
+            log.info("WhatsApp active window title fallback: %s", active_title)
+        return self._title_matches_contact(active_title, contact)
 
     def _get_whatsapp_window(self):
         wins = self._list_whatsapp_windows()
@@ -804,22 +1000,23 @@ class WhatsAppController:
         pyautogui.PAUSE = 0.3
 
         if not self._open_contact_chat(contact, phone):
-            webbrowser.open("https://web.whatsapp.com")
+            log.warning(f"Could not open a WhatsApp Desktop chat for {contact}; not falling back to web")
+            self._open_desktop_app()
+            self._focus_whatsapp_window(wait_seconds=8)
             return
         try:
             pyautogui.press("esc")
             time.sleep(0.2)
         except Exception:
             pass
-        if self._start_call_from_header(video=video):
-            log.info(f"Activated {'video ' if video else ''}call from header controls for {contact}")
-            return
         if self._click_call_button(video=video):
             log.info(f"Activated {'video ' if video else ''}call button for {contact} via UI automation")
             return
-        log.warning(f"Could not resolve a direct call button for {contact}; trying keyboard shortcut")
         if self._start_call_via_shortcut(contact, video=video):
             log.info(f"Confirmed {'video ' if video else ''}call shortcut for {contact}")
+            return
+        if self._start_call_from_header(video=video):
+            log.info(f"Activated {'video ' if video else ''}call from header controls for {contact}")
             return
         log.warning(f"WhatsApp call automation ran out of safe fallbacks for {contact}")
 
@@ -874,10 +1071,13 @@ class WhatsAppController:
         return False
 
     def _pywinauto_desktop(self):
+        if self._ui_automation_unavailable:
+            return None
         try:
             import comtypes
             import types
         except Exception as e:
+            self._ui_automation_unavailable = True
             log.warning(f"UI automation prerequisites are unavailable: {e}")
             return None
 
@@ -894,8 +1094,28 @@ class WhatsAppController:
 
             return Desktop(backend="uia")
         except Exception as e:
+            self._ui_automation_unavailable = True
             log.warning(f"UI automation backend could not start: {e}")
             return None
+
+    def _click_first_search_result(self, win, contact: str, query: str, source: str) -> bool:
+        try:
+            import pyautogui
+        except Exception:
+            return False
+
+        try:
+            result_x, result_y = self._first_search_result_point(win)
+            pyautogui.click(result_x, result_y)
+            time.sleep(1.0)
+        except Exception as e:
+            log.warning(f"Could not click the first WhatsApp search result for {contact}: {e}")
+            return False
+
+        if self._current_chat_matches(contact):
+            log.info(f"Opened WhatsApp chat via {source} for {contact} using query '{query}'")
+            return True
+        return self._can_assume_chat_opened(contact, query, source=source)
 
     def _button_signature(self, button) -> tuple:
         rect = button.rectangle()

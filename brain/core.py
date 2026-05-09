@@ -781,20 +781,22 @@ class Brain:
         p = {"raw": original}
 
         if intent in ("open_app", "close_app"):
+            candidate = ""
             for alias, name in APP_MAP.items():
                 if alias in low:
                     p["app"] = name
                     break
-            if not p.get("app"):
-                lowered = original.lower().strip()
-                for prefix in ("open ", "launch ", "start ", "run ", "close ", "kill ", "quit "):
-                    if lowered.startswith(prefix):
-                        candidate = lowered[len(prefix):].strip()
-                        if candidate:
-                            match = get_close_matches(candidate, list(APP_MAP.keys()), n=1, cutoff=0.7)
-                            if match:
-                                p["app"] = APP_MAP[match[0]]
-                        break
+            lowered = original.lower().strip()
+            for prefix in ("open ", "launch ", "start ", "run ", "close ", "kill ", "quit "):
+                if lowered.startswith(prefix):
+                    candidate = lowered[len(prefix):].strip()
+                    if candidate:
+                        p["target"] = candidate
+                    if candidate and not p.get("app"):
+                        match = get_close_matches(candidate, list(APP_MAP.keys()), n=1, cutoff=0.7)
+                        if match:
+                            p["app"] = APP_MAP[match[0]]
+                    break
 
         elif intent in ("search_google", "web_search"):
             for kw in ["search for", "search on google", "google ", "look up",
@@ -1176,12 +1178,15 @@ class Brain:
             # ── Apps ──────────────────────────────────
             if intent == "open_app":
                 app = params.get("app")
+                target = (params.get("target") or "").strip()
                 if app:
                     if app == "whatsapp" and wa:
                         return wa.open_whatsapp()
                     if app in {"youtube", "google", "gmail", "github", "instagram", "reddit", "linkedin", "netflix", "maps", "drive", "meet"}:
                         return browser.open_url(app)
                     return apps.open(app)
+                if target and browser:
+                    return browser.open_url(target)
                 return f"I couldn't identify which app to open, {USER_NAME}."
             if intent == "close_app":
                 app = params.get("app")
