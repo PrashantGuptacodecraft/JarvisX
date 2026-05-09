@@ -716,11 +716,17 @@ class Brain:
         text = (raw or "").strip()
         low  = text.lower()
 
+        # Relationship labels to strip after extracting name candidates
+        _rel = re.compile(
+            r"^(?:best\s+friend|friend|brother|sister|boss|bhai|didi|bro|sis)\s+",
+            re.IGNORECASE,
+        )
+
         # Pattern 1: VERB [to] CONTACT (that|saying|:|-) MESSAGE
         # e.g. "tell abhishek that I am coming" / "message to rahul saying hello"
         m = re.search(
-            r'\b(?:tell|message|measage|whatsapp|text|msg)\s+(?:to\s+)?(\w[\w ]{0,28}?)'
-            r'\s+(?:that|saying|says|tell(?:ing)?|:|-)',
+            r"\b(?:tell|message|measage|whatsapp|text|msg)\s+(?:to\s+)?(\w[\w ]{0,28}?)"
+            r"\s+(?:that|saying|says|tell(?:ing)?|:|-)",
             low,
         )
         if m:
@@ -729,23 +735,26 @@ class Brain:
         # Pattern 2: send MESSAGE to CONTACT  (message-first, to-delimited)
         # e.g. "send message hiii to abhishek"  /  "send hiii to my friend rahul"
         m = re.search(
-            r'\b(?:send\s+(?:whatsapp\s+)?(?:message|measage)?|message|measage|whatsapp)'
-            r'\s+.+?\bto\s+(?:my\s+(?:friend|best friend|brother|sister|boss)?\s*)?(\w[\w ]{0,24}?)\s*$',
+            r"\b(?:send\s+(?:whatsapp\s+)?(?:message|measage)?|message|measage|whatsapp)"
+            r"\s+.+?\bto\s+(?:my\s+)?(\w[\w ]{0,30}?)\s*$",
             low,
         )
         if m:
-            return self._clean_contact_name(m.group(1))
+            raw_name = _rel.sub("", m.group(1).strip())
+            return self._clean_contact_name(raw_name)
 
-        # Pattern 3: plain "to CONTACT" anywhere
-        m = re.search(r'\bto\s+(?:my\s+)?([a-z][a-z ]{0,24}?)(?:\s+(?:saying|that|:)|$)', low)
+        # Pattern 3: plain "to CONTACT" anywhere (no message keyword needed)
+        # e.g. "send hiii to dad"
+        m = re.search(r"\bto\s+(?:my\s+)?([a-z][\w ]{0,24}?)(?:\s+(?:saying|that|:)|$)", low)
         if m:
-            candidate = m.group(1).strip()
+            candidate = _rel.sub("", m.group(1).strip())
             if not self._CONTACT_STOP_WORDS.match(candidate):
                 return self._clean_contact_name(candidate)
 
         # Pattern 4: VERB CONTACT MESSAGE with no connector — take word after verb
+        # e.g. "message rahul good morning"
         m = re.search(
-            r'^(?:message|measage|text|msg|whatsapp)\s+(\w+)(?:\s+.+)?$', low
+            r"^(?:message|measage|text|msg|whatsapp)\s+(\w+)(?:\s+.+)?$", low
         )
         if m:
             return self._clean_contact_name(m.group(1))

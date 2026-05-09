@@ -113,8 +113,28 @@ def build_jarvis(gui=None, command_queue=None):
 
 
 def boot_message(ai, listener, user_name: str) -> str:
-    return f"Hello {user_name}."
-
+    """Return a time-aware greeting spoken at startup."""
+    import datetime, random
+    hour = datetime.datetime.now().hour
+    if hour < 12:
+        greetings = [
+            f"Good morning, {user_name}. Systems are online and I'm ready.",
+            f"Good morning, {user_name}. All systems up. What's the plan today?",
+            f"Morning, {user_name}. I'm online and listening.",
+        ]
+    elif hour < 17:
+        greetings = [
+            f"Good afternoon, {user_name}. I'm online. What can I do for you?",
+            f"Afternoon, {user_name}. Systems ready. How can I help?",
+            f"Good afternoon, {user_name}. Standing by.",
+        ]
+    else:
+        greetings = [
+            f"Good evening, {user_name}. I'm online. What do you need?",
+            f"Evening, {user_name}. All systems ready.",
+            f"Good evening, {user_name}. I'm here whenever you need me.",
+        ]
+    return random.choice(greetings)
 
 
 def run_gui():

@@ -1,5 +1,5 @@
 {
-  "air_drawing": false,
+  "air_drawing": true,
   "gesture_heatmap": false,
   "voice_gesture_fusion": false,
   "ar_overlay": false

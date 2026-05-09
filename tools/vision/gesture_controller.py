@@ -30,16 +30,16 @@ GESTURE_LABELS = {
 }
 
 GESTURE_DESCRIPTIONS = {
-    G_CURSOR:   "☝  Index finger",
-    G_CLICK:    "🤏  Pinch (thumb+index)",
-    G_RCLICK:   "☝✌  Index+mid+ring",
-    G_SCROLL_U: "🖐  Open palm (4 fingers)",
-    G_SCROLL_D: "✊  Fist (all closed)",
+    G_CURSOR:   "☝  Index finger only",
+    G_CLICK:    "🤏  Pinch (thumb+index) or curl index",
+    G_RCLICK:   "✌  Index+middle+ring (peace+ring)",
+    G_SCROLL_U: "🖐  Open palm (4 fingers) — scroll up",
+    G_SCROLL_D: "✊  Fist (all fingers closed)",
     G_VOL_UP:   "👍  Thumb up only",
     G_VOL_DN:   "👎  Thumb down only",
-    G_SHOT:     "🤘  Rock sign (tap)",
-    G_SHOT_SEL: "🤘  Rock sign (hold 0.6s) → area select",
-    G_WAKE:     "🖐  Palm high",
+    G_SHOT:     "🤘  Rock sign (index+pinky) — quick tap for screenshot",
+    G_SHOT_SEL: "🤘  Rock sign held 0.6s → area select",
+    G_WAKE:     "🖐  Open palm with wrist high — wake JARVIS",
     G_NONE:     "—  No Gesture",
 }
 
@@ -110,6 +110,30 @@ class GestureController:
             self.stop()
             return False
         return self.start(cam_index=cam_index)
+
+    def toggle_draw_mode(self) -> bool:
+        """Activate/deactivate Air Drawing Mode directly via button or voice.
+        Starts gesture engine automatically if not already running.
+        Returns True if draw mode is now ON.
+        """
+        if not self._active:
+            # Start gesture engine first if not running
+            self.start(cam_index=0)
+        if self._engine and hasattr(self._engine, "toggle_draw_mode"):
+            on = self._engine.toggle_draw_mode()
+            if self.gui and hasattr(self.gui, "show_notification"):
+                if on:
+                    self.gui.show_notification(
+                        "✏ Air Drawing ON",
+                        "Fullscreen canvas open.\n"
+                        "☝ Index = Draw  ✌ Peace = Lift pen\n"
+                        "✊ Fist (hold) = Save & Exit",
+                    )
+                else:
+                    self.gui.show_notification("Air Drawing OFF", "Canvas closed and saved.")
+            return on
+        log.warning("toggle_draw_mode: engine not available")
+        return False
 
     # ── Callbacks ─────────────────────────────────────────────────────────────
 

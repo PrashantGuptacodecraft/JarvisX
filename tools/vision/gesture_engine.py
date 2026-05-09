@@ -210,8 +210,9 @@ class GestureEngine:
         # Gesture history for HUD
         self.gesture_history: deque = deque(maxlen=6)
 
-        # Feature modules (air_drawing, heatmap, VGF, AR)
-        self._module_mgr = ModuleManager() if _MODULES_AVAILABLE else None
+        # Feature modules — created fresh in start() so features.json is current
+        self._module_mgr = None
+        self._air_drawing_ref = None   # direct ref for toggle_draw_mode()
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -226,6 +227,14 @@ class GestureEngine:
         except ImportError as e:
             log.error("Missing deps: %s", e)
             return False
+        # Reload modules fresh so features.json changes are picked up
+        if _MODULES_AVAILABLE:
+            self._module_mgr = ModuleManager()
+            # Keep a direct reference to AirDrawing if loaded
+            for mod in self._module_mgr._modules:
+                if mod.__class__.__name__ == "AirDrawing":
+                    self._air_drawing_ref = mod
+                    break
         self._running = True
         self._thread = threading.Thread(
             target=self._loop, daemon=True, name="gesture-engine"
@@ -249,6 +258,35 @@ class GestureEngine:
     def pause(self):  self._paused = True
     def resume(self): self._paused = False
 
+    def toggle_draw_mode(self) -> bool:
+        """Activate or deactivate Air Drawing Mode directly (no gesture needed).
+        Returns True if draw mode is now ON, False if OFF.
+        """
+        if self._air_drawing_ref is None:
+            log.warning("AirDrawing module not loaded — check features.json air_drawing:true")
+            return False
+        ad = self._air_drawing_ref
+        if ad._active:
+            ad._active = False
+            try:
+                import cv2 as _cv
+                _cv.destroyWindow("JARVIS Air Drawing")
+            except Exception:
+                pass
+            log.info("Air Drawing deactivated via toggle")
+            return False
+        else:
+            import numpy as np
+            ad._canvas = np.zeros((ad._fh, ad._fw, 4), np.uint8)
+            ad._strokes.clear()
+            ad._cur = None
+            ad._prev_pt = None
+            ad._buf.clear()
+            ad._active = True
+            ad._open_window()
+            log.info("Air Drawing activated via toggle")
+            return True
+
     def set_mode(self, mode: str) -> None:
         log.info("Mode: %s", mode)
 
@@ -268,18 +306,19 @@ class GestureEngine:
         opts = HandLandmarkerOptions(
             base_options=BaseOptions(model_asset_path=MODEL_PATH),
             running_mode=RunningMode.IMAGE,
-            num_hands=1,
-            min_hand_detection_confidence=0.60,
-            min_hand_presence_confidence=0.50,
-            min_tracking_confidence=0.50,
+            num_hands=2,
+            min_hand_detection_confidence=0.65,
+            min_hand_presence_confidence=0.55,
+            min_tracking_confidence=0.55,
         )
 
         # Try DirectShow first (faster on Windows), fall back to default
         cap = cv2.VideoCapture(self.cam_index, cv2.CAP_DSHOW)
         if not cap.isOpened():
             cap = cv2.VideoCapture(self.cam_index)
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        # 1280x720 gives better landmark accuracy for air drawing
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
         cap.set(cv2.CAP_PROP_FPS, 30)
 
         with HandLandmarker.create_from_options(opts) as landmarker:
