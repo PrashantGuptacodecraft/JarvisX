@@ -382,7 +382,9 @@ class GestureEngine:
 
                             # ── Rock-sign held → enter screenshot select ──
                             if gesture == G_SHOT:
-                                if self._rock_since == 0.0:
+                                if self._air_drawing_ref is not None and self._air_drawing_ref._active:
+                                    self._rock_since = 0.0
+                                elif self._rock_since == 0.0:
                                     self._rock_since = now_t
                                 elif now_t - self._rock_since >= SHOT_SEL_HOLD:
                                     # Held long enough → area-select mode
@@ -531,6 +533,10 @@ class GestureEngine:
 
     def _fire(self, gesture: str) -> None:
         now = time.time()
+        if self._air_drawing_ref is not None and self._air_drawing_ref._active:
+            if gesture in (G_SHOT, G_SHOT_SEL):
+                log.debug("Ignored screenshot gesture while Air Drawing active: %s", gesture)
+                return
         if gesture == G_CLICK and (now - self._last_click) < CLICK_COOLDOWN:
             return
         if gesture == G_CLICK:

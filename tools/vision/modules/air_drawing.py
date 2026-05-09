@@ -80,6 +80,8 @@ class AirDrawing:
         self._prev_pt: Optional[tuple]      = None
         self._buf:     deque = deque(maxlen=6)   # smoothing buffer
         self._pen_up:  bool  = True             # true when pen is lifted / paused
+        self._saved_msg: str = ""
+        self._saved_msg_t: float = 0.0
 
         # Entry
         self._palm_t   = 0.0
@@ -94,9 +96,11 @@ class AirDrawing:
         # Shape snap
         self._last_draw_t = 0.0
         self._snap_done   = False
-        # Fullscreen window size
+        # Fullscreen window size — use defaults, will detect on first draw
         self._fw = 1280
         self._fh = 720
+        self._win_created = False
+        self._last_win_check = 0.0
         os.makedirs(_SAVE_DIR, exist_ok=True)
         log.info("AirDrawing v3 ready — ☝✌📍 Three fingers 1.5s to activate")
 
@@ -111,11 +115,15 @@ class AirDrawing:
             return
 
         # ── Fullscreen window management ──────────────────────────────────────
-        try:
-            if cv2.getWindowProperty(_WIN, cv2.WND_PROP_VISIBLE) < 1:
-                self._open_window()
-        except Exception:
-            self._open_window()
+        now = time.time()
+        if not self._win_created or (now - self._last_win_check > 0.5):
+            self._last_win_check = now
+            try:
+                if cv2.getWindowProperty(_WIN, cv2.WND_PROP_VISIBLE) < 1:
+                    self._open_window()
+            except Exception:
+                if not self._win_created:
+                    self._open_window()
 
         # Build fullscreen canvas for display
         h, w = frame.shape[:2]
@@ -237,14 +245,21 @@ class AirDrawing:
             self._palm_t = 0.0
 
     def _open_window(self):
-        cv2.namedWindow(_WIN, cv2.WINDOW_NORMAL)
-        cv2.resizeWindow(_WIN, self._fw, self._fh)
-        cv2.moveWindow(_WIN, 0, 0)
-        cv2.setWindowProperty(_WIN, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-        cv2.setWindowProperty(_WIN, cv2.WND_PROP_TOPMOST, 1)
+        try:
+            cv2.namedWindow(_WIN, cv2.WINDOW_NORMAL)
+            cv2.setWindowProperty(_WIN, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+            cv2.setWindowProperty(_WIN, cv2.WND_PROP_TOPMOST, 1)
+            self._win_created = True
+        except Exception as e:
+            log.warning("Window creation issue: %s", e)
+            self._win_created = False
 
     def _fire_action(self, g: str, display: np.ndarray):
         now = time.time()
+        # If the user changes brush/color while a stroke is open,
+        # commit the current stroke so the new selection applies immediately.
+        if self._cur is not None:
+            self._commit_stroke(now)
         if g == "BRUSH":
             self._brush_i = (self._brush_i + 1) % len(BRUSHES)
             self._prev_pt = None; self._buf.clear()
@@ -329,6 +344,7 @@ class AirDrawing:
             compact = 4*math.pi*area / (peri**2)
             col  = stroke.color; t = max(2,stroke.size)
             bgra = (*col,255)
+            # Circle detection (compact >= 0.72)
             if compact > 0.72:
                 (cx,cy),r = cv2.minEnclosingCircle(pts)
                 self._canvas[:]=0
@@ -336,7 +352,9 @@ class AirDrawing:
                     for i in range(1,len(s.points)):
                         self._interpolate_paint(self._canvas,s.points[i-1],s.points[i],s)
                 cv2.circle(self._canvas,(int(cx),int(cy)),int(r),bgra,t,cv2.LINE_AA)
-            else:
+                log.info("Shape → CIRCLE")
+            # Rectangle/square detection (0.55 < compact < 0.72)
+            elif compact > 0.55:
                 x,y,rw,rh = cv2.boundingRect(pts)
                 if rw*rh > 0 and area/(rw*rh) > 0.55:
                     self._canvas[:]=0
@@ -344,6 +362,36 @@ class AirDrawing:
                         for i in range(1,len(s.points)):
                             self._interpolate_paint(self._canvas,s.points[i-1],s.points[i],s)
                     cv2.rectangle(self._canvas,(x,y),(x+rw,y+rh),bgra,t,cv2.LINE_AA)
+                    log.info("Shape → RECTANGLE")
+            # Triangle/polygon detection
+            else:
+                approx = cv2.approxPolyDP(hull, 0.02*peri, True)
+                if len(approx) == 3:
+                    self._canvas[:]=0
+                    for s in self._strokes[:-1]:
+                        for i in range(1,len(s.points)):
+                            self._interpolate_paint(self._canvas,s.points[i-1],s.points[i],s)
+                    cv2.polylines(self._canvas, [approx], True, bgra, t, cv2.LINE_AA)
+                    log.info("Shape → TRIANGLE")
+                elif len(approx) == 4:
+                    self._canvas[:]=0
+                    for s in self._strokes[:-1]:
+                        for i in range(1,len(s.points)):
+                            self._interpolate_paint(self._canvas,s.points[i-1],s.points[i],s)
+                    cv2.polylines(self._canvas, [approx], True, bgra, t, cv2.LINE_AA)
+                    log.info("Shape → QUADRILATERAL")
+                elif len(pts) >= 2:
+                    # Line detection: check if points are roughly collinear
+                    p1, p2 = tuple(map(int, pts[0])), tuple(map(int, pts[-1]))
+                    fit_line = cv2.fitLine(pts, cv2.DIST_L2, 0, 0.01, 0.01)
+                    _, _, vx, vy = fit_line
+                    if abs(vx) > 0 or abs(vy) > 0:
+                        self._canvas[:]=0
+                        for s in self._strokes[:-1]:
+                            for i in range(1,len(s.points)):
+                                self._interpolate_paint(self._canvas,s.points[i-1],s.points[i],s)
+                        cv2.line(self._canvas, p1, p2, bgra, t, cv2.LINE_AA)
+                        log.info("Shape → LINE")
         except Exception as e:
             log.debug("Snap err: %s", e)
 
@@ -354,12 +402,32 @@ class AirDrawing:
                   (frame.astype(np.float32)*(1-a) +
                    self._canvas[:,:,:3].astype(np.float32)*a).astype(np.uint8))
 
+    def _detect_screen_size(self) -> tuple[int, int]:
+        try:
+            import pyautogui
+            return pyautogui.size()
+        except Exception:
+            try:
+                import ctypes
+                user32 = ctypes.windll.user32
+                return user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
+            except Exception:
+                return 1280, 720
+
     def _save(self, frame):
         ts   = time.strftime("%Y%m%d_%H%M%S")
         path = os.path.join(_SAVE_DIR, f"drawing_{ts}.png")
-        self._blend(frame)
-        cv2.imwrite(path, frame)
+        if self._cur is not None:
+            self._commit_stroke(time.time())
+        canvas = np.ones((self._fh, self._fw, 3), np.uint8) * 255
+        if self._canvas is not None:
+            alpha = self._canvas[:, :, 3:4].astype(np.float32) / 255.0
+            canvas = (canvas.astype(np.float32) * (1.0 - alpha) +
+                      self._canvas[:, :, :3].astype(np.float32) * alpha).astype(np.uint8)
+        cv2.imwrite(path, canvas)
         log.info("Saved: %s", path)
+        self._saved_msg = f"Saved: {os.path.basename(path)}"
+        self._saved_msg_t = time.time()
 
     def _draw_countdown(self, frame, hold, total, text, color):
         fw, fh = frame.shape[1], frame.shape[0]
@@ -401,6 +469,16 @@ class AirDrawing:
             prog = min((time.time()-self._action_t)/ACTION_HOLD, 1.0)
             bw   = int(fw * prog)
             cv2.rectangle(frame,(0,fh-6),(bw,fh),(0,200,255),-1)
+
+        # Save confirmation text
+        if self._saved_msg and time.time() - self._saved_msg_t < 2.0:
+            text = self._saved_msg
+            (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.65, 2)
+            cv2.rectangle(frame, (fw-20-tw, 50), (fw-10, 50+th+8), (0,0,0), -1)
+            cv2.putText(frame, text, (fw-18-tw, 50+th),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0,255,100), 2, cv2.LINE_AA)
+        elif time.time() - self._saved_msg_t >= 2.0:
+            self._saved_msg = ""
 
     def clear(self):
         if self._canvas is not None: self._canvas[:] = 0
