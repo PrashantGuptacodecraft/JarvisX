@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>JARVIS Gesture Analytics</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+<style>
+  :root{
+    --bg:#000;--panel:#0a0a1a;--border:#00d4ff22;--accent:#00d4ff;
+    --text:#8ab4d4;--muted:#3a5a74;--green:#00ff88;--red:#ff4466;
+    --yellow:#ffd700;--glow:0 0 12px #00d4ff44;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;
+       min-height:100vh;overflow-x:hidden;}
+
+  /* ── Grid ── */
+  .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:14px;
+        padding:16px;max-width:1600px;margin:0 auto;}
+  .col2{grid-column:span 2;}
+  .col3{grid-column:span 3;}
+  .col4{grid-column:span 4;}
+  .col6{grid-column:span 6;}
+  .col12{grid-column:span 12;}
+
+  /* ── Header ── */
+  header{background:var(--panel);border-bottom:1px solid var(--border);
+         padding:14px 24px;display:flex;align-items:center;justify-content:space-between;}
+  header h1{font-size:1.1rem;letter-spacing:3px;color:var(--accent);
+            text-transform:uppercase;font-weight:300;}
+  .live-dot{width:8px;height:8px;border-radius:50%;background:var(--green);
+            animation:blink 1.2s ease infinite;display:inline-block;margin-right:8px;}
+  @keyframes blink{0%,100%{opacity:1;}50%{opacity:.2;}}
+
+  /* ── Cards ── */
+  .card{background:var(--panel);border:1px solid var(--border);
+        border-radius:10px;padding:18px;transition:box-shadow .3s;position:relative;overflow:hidden;}
+  .card:hover{box-shadow:var(--glow);}
+  .card::before{content:'';position:absolute;top:0;left:0;right:0;height:1px;
+                background:linear-gradient(90deg,transparent,var(--accent),transparent);}
+  .card-label{font-size:.68rem;letter-spacing:2px;color:var(--muted);
+              text-transform:uppercase;margin-bottom:10px;}
+  .stat-num{font-size:2.6rem;font-weight:700;color:var(--accent);
+            font-variant-numeric:tabular-nums;transition:color .3s;}
+  .stat-sub{font-size:.72rem;color:var(--muted);margin-top:4px;}
+
+  /* ── Reconnect banner ── */
+  #reconnect{display:none;position:fixed;top:0;left:0;right:0;z-index:9999;
+             background:#ff4466;color:#fff;text-align:center;padding:8px;
+             font-size:.85rem;letter-spacing:1px;}
+
+  /* ── Heatmap ── */
+  #heatmap-img{width:100%;border-radius:6px;border:1px solid var(--border);
+               display:block;min-height:160px;background:#0a0a1a;}
+
+  /* ── Compare ── */
+  .compare-row{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;}
+  .compare-row input[type=text]{flex:1;background:#0a0a1a;border:1px solid var(--border);
+    color:var(--text);padding:7px 10px;border-radius:6px;font-size:.82rem;}
+  .compare-row button,.btn{background:var(--accent);color:#000;border:none;
+    padding:8px 18px;border-radius:6px;font-weight:700;cursor:pointer;
+    font-size:.82rem;transition:opacity .2s;}
+  .btn:hover,.compare-row button:hover{opacity:.8;}
+  #compare-result{margin-top:12px;font-size:.82rem;}
+  .cmp-col{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;}
+  .cmp-item{background:#0a0a1a;border:1px solid var(--border);border-radius:6px;padding:10px;}
+  .cmp-item .label{font-size:.65rem;color:var(--muted);margin-bottom:4px;}
+  .cmp-item .val{font-size:1.1rem;color:var(--accent);font-weight:600;}
+
+  /* ── Chart containers ── */
+  .chart-wrap{position:relative;height:220px;}
+</style>
+</head>
+<body>
+<div id="reconnect">⚡ Reconnecting to JARVIS…</div>
+
+<header>
+  <h1>⚡ JARVIS Gesture Analytics</h1>
+  <div><span class="live-dot"></span><span id="conn-status" style="font-size:.8rem;color:var(--green)">LIVE</span></div>
+</header>
+
+<div class="grid">
+
+  <!-- ── Stat cards ── -->
+  <div class="card col3">
+    <div class="card-label">Total Gestures Today</div>
+    <div class="stat-num" id="s-total">0</div>
+    <div class="stat-sub">session running</div>
+  </div>
+  <div class="card col3">
+    <div class="card-label">Economy Score</div>
+    <div class="stat-num" id="s-economy">—</div>
+    <div class="stat-sub">gestures / min normalised</div>
+  </div>
+  <div class="card col3">
+    <div class="card-label">Session Duration</div>
+    <div class="stat-num" id="s-duration">0s</div>
+    <div class="stat-sub">since session start</div>
+  </div>
+  <div class="card col3">
+    <div class="card-label">Avg Confidence</div>
+    <div class="stat-num" id="s-conf">—</div>
+    <div class="stat-sub">across all gestures</div>
+  </div>
+
+  <!-- ── Heatmap ── -->
+  <div class="card col6">
+    <div class="card-label">Gesture Heatmap</div>
+    <img id="heatmap-img" src="" alt="Heatmap loading…"/>
+  </div>
+
+  <!-- ── Doughnut ── -->
+  <div class="card col6">
+    <div class="card-label">Gesture Distribution</div>
+    <div class="chart-wrap"><canvas id="chart-dist"></canvas></div>
+  </div>
+
+  <!-- ── Fatigue line ── -->
+  <div class="card col6">
+    <div class="card-label">Fatigue Curve</div>
+    <div class="chart-wrap"><canvas id="chart-fatigue"></canvas></div>
+  </div>
+
+  <!-- ── Hourly bar ── -->
+  <div class="card col6">
+    <div class="card-label">Hourly Gesture Count</div>
+    <div class="chart-wrap"><canvas id="chart-hourly"></canvas></div>
+  </div>
+
+  <!-- ── Session compare ── -->
+  <div class="card col12">
+    <div class="card-label">Session Comparison</div>
+    <div class="compare-row">
+      <input type="text" id="sid1" placeholder="Session ID 1"/>
+      <input type="text" id="sid2" placeholder="Session ID 2"/>
+      <button onclick="compareSessions()">Compare</button>
+    </div>
+    <div id="compare-result"></div>
+  </div>
+
+</div><!-- /grid -->
+
+<script>
+// ── Chart.js palette ──────────────────────────────────────────────────────
+const PALETTE=[
+  '#00d4ff','#00ff88','#ffd700','#ff6b6b','#c77dff',
+  '#4cc9f0','#f72585','#7209b7','#3a0ca3','#4361ee',
+  '#4895ef','#560bad','#f3722c','#f8961e','#90be6d',
+];
+
+const DARK_OPTS = {
+  color:'#8ab4d4',
+  plugins:{legend:{labels:{color:'#8ab4d4',boxWidth:12}}},
+  scales:{x:{ticks:{color:'#8ab4d4'},grid:{color:'#00d4ff11'}},
+          y:{ticks:{color:'#8ab4d4'},grid:{color:'#00d4ff11'}}},
+};
+
+// ── Chart instances ───────────────────────────────────────────────────────
+let distChart, fatigueChart, hourlyChart;
+
+function initCharts(){
+  // Distribution doughnut
+  distChart = new Chart(document.getElementById('chart-dist'),{
+    type:'doughnut',
+    data:{labels:[],datasets:[{data:[],backgroundColor:PALETTE,borderWidth:0}]},
+    options:{plugins:{legend:{position:'right',labels:{color:'#8ab4d4',boxWidth:12}}},
+             animation:{duration:500}},
+  });
+
+  // Fatigue line
+  fatigueChart = new Chart(document.getElementById('chart-fatigue'),{
+    type:'line',
+    data:{labels:[],datasets:[{
+      label:'Fatigue Index',data:[],borderColor:'#00d4ff',
+      backgroundColor:'rgba(0,212,255,0.08)',fill:true,tension:0.4,
+      pointBackgroundColor: ctx => {
+        const v=ctx.parsed?.y??0;
+        return v>=85?'#00ff88':v>=70?'#ffd700':'#ff4466';
+      },
+      pointRadius:4,
+    }]},
+    options:{...DARK_OPTS,plugins:{legend:{labels:{color:'#8ab4d4'}}}},
+  });
+
+  // Hourly bar
+  hourlyChart = new Chart(document.getElementById('chart-hourly'),{
+    type:'bar',
+    data:{labels:[...Array(24).keys()].map(h=>h+'h'),
+          datasets:[{label:'Gestures',data:Array(24).fill(0),
+                     backgroundColor:'#00d4ff88',borderRadius:3}]},
+    options:{...DARK_OPTS,plugins:{legend:{display:false}}},
+  });
+}
+
+// ── Animated number counter ───────────────────────────────────────────────
+function animateNum(el,target,suffix='',duration=500){
+  const from=parseInt(el.textContent)||0;
+  const start=performance.now();
+  function step(now){
+    const p=Math.min((now-start)/duration,1);
+    el.textContent=Math.round(from+(target-from)*p)+suffix;
+    if(p<1) requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+}
+
+// ── Stats update ──────────────────────────────────────────────────────────
+function applyStats(d){
+  animateNum(document.getElementById('s-total'), d.total_gestures??0);
+  const dur = d.start_time
+    ? Math.round((Date.now()-new Date(d.start_time+'Z').getTime())/1000)+'s'
+    : '—';
+  document.getElementById('s-duration').textContent=dur;
+  document.getElementById('s-economy').textContent=
+    d.economy_score!=null ? d.economy_score.toFixed(1)+'%' : '—';
+  document.getElementById('s-conf').textContent=
+    d.avg_confidence!=null ? (d.avg_confidence*100).toFixed(1)+'%' : '—';
+}
+
+function applyDist(d){
+  const labels=Object.keys(d);
+  const vals=Object.values(d);
+  distChart.data.labels=labels;
+  distChart.data.datasets[0].data=vals;
+  distChart.update('none');
+}
+
+function applyFatigue(arr){
+  fatigueChart.data.labels=arr.map(r=>r.minute+'m');
+  fatigueChart.data.datasets[0].data=arr.map(r=>r.fatigue);
+  fatigueChart.update('none');
+}
+
+function applyHourly(arr){
+  hourlyChart.data.datasets[0].data=arr.map(r=>r.count);
+  hourlyChart.update('none');
+}
+
+// ── Heatmap polling ───────────────────────────────────────────────────────
+function fetchHeatmap(){
+  fetch('/heatmap')
+    .then(r=>r.json())
+    .then(d=>{
+      if(d.image) document.getElementById('heatmap-img').src='data:image/png;base64,'+d.image;
+    }).catch(()=>{});
+}
+setInterval(fetchHeatmap,3000);
+
+// ── Hourly + fatigue polling ──────────────────────────────────────────────
+function pollSlowData(){
+  fetch('/hourly').then(r=>r.json()).then(applyHourly).catch(()=>{});
+  fetch('/fatigue').then(r=>r.json()).then(applyFatigue).catch(()=>{});
+}
+setInterval(pollSlowData,5000);
+
+// ── Session comparison ────────────────────────────────────────────────────
+async function compareSessions(){
+  const s1=document.getElementById('sid1').value.trim();
+  const s2=document.getElementById('sid2').value.trim();
+  if(!s1||!s2){alert('Enter both session IDs');return;}
+  const res=await fetch(`/compare?session_id_1=${encodeURIComponent(s1)}&session_id_2=${encodeURIComponent(s2)}`);
+  const d=await res.json();
+  const el=document.getElementById('compare-result');
+  if(Object.keys(d).length===0){el.innerHTML='<span style="color:var(--red)">No data found</span>';return;}
+  el.innerHTML='<div class="cmp-col">'+Object.entries(d).map(([sid,info])=>`
+    <div class="cmp-item">
+      <div class="label">Session ${sid.slice(0,8)}…</div>
+      <div class="val">${info.total_gestures} gestures</div>
+      <div style="color:var(--muted);font-size:.75rem;margin-top:4px">
+        Economy: ${(info.economy_score||0).toFixed(1)}% &nbsp;|&nbsp;
+        Fatigue: ${(info.fatigue_index||0).toFixed(3)}
+      </div>
+    </div>`).join('')+'</div>';
+}
+
+// ── Socket.IO ─────────────────────────────────────────────────────────────
+const socket=io({transports:['websocket','polling'],reconnectionDelay:1000});
+
+socket.on('connect',()=>{
+  document.getElementById('reconnect').style.display='none';
+  document.getElementById('conn-status').textContent='LIVE';
+  document.getElementById('conn-status').style.color='var(--green)';
+});
+socket.on('disconnect',()=>{
+  document.getElementById('reconnect').style.display='block';
+  document.getElementById('conn-status').textContent='OFFLINE';
+  document.getElementById('conn-status').style.color='var(--red)';
+});
+socket.on('stats',applyStats);
+socket.on('distribution',applyDist);
+socket.on('fatigue',applyFatigue);
+socket.on('heatmap',d=>{
+  if(d.image) document.getElementById('heatmap-img').src='data:image/png;base64,'+d.image;
+});
+
+// ── Boot ──────────────────────────────────────────────────────────────────
+initCharts();
+fetchHeatmap();
+pollSlowData();
+fetch('/stats').then(r=>r.json()).then(applyStats).catch(()=>{});
+fetch('/distribution').then(r=>r.json()).then(applyDist).catch(()=>{});
+</script>
+</body>
+</html>

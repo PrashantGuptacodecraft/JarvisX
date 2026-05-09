@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Gesture Control Dashboard</title>
+  <style>
+    :root {
+      --bg: #0a0e1a; --panel: #111827; --accent: #00d4ff;
+      --green: #00ff88; --red: #ff4466; --text: #e2e8f0;
+      --muted: #64748b; --border: #1e293b;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text);
+           font-family: 'Segoe UI', system-ui, sans-serif; min-height: 100vh; }
+    header { padding: 18px 28px; border-bottom: 1px solid var(--border);
+             display: flex; align-items: center; justify-content: space-between; }
+    header h1 { font-size: 1.3rem; letter-spacing: 2px; color: var(--accent);
+                text-transform: uppercase; }
+    .badge { background: var(--green); color: #000; padding: 3px 12px;
+             border-radius: 20px; font-size: .75rem; font-weight: 700; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+            gap: 16px; padding: 24px; }
+    .card { background: var(--panel); border: 1px solid var(--border);
+            border-radius: 12px; padding: 20px; }
+    .card h2 { font-size: .8rem; color: var(--muted); text-transform: uppercase;
+               letter-spacing: 1px; margin-bottom: 12px; }
+    .metric { font-size: 2.4rem; font-weight: 700; color: var(--accent); }
+    .metric-label { font-size: .8rem; color: var(--muted); margin-top: 4px; }
+    table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+    th { text-align: left; color: var(--muted); padding: 6px 4px;
+         border-bottom: 1px solid var(--border); font-weight: 500; }
+    td { padding: 7px 4px; border-bottom: 1px solid #1a2235; }
+    .bar-cell { width: 120px; }
+    .bar { height: 6px; border-radius: 3px; background: var(--accent); min-width: 2px; }
+    #log { font-family: monospace; font-size: .78rem; color: var(--muted);
+           max-height: 260px; overflow-y: auto; }
+    #log div { padding: 3px 0; border-bottom: 1px solid #111d2e; }
+    #log div:last-child { color: var(--green); }
+    .uptime { font-size: .85rem; color: var(--muted); }
+    button { background: var(--accent); color: #000; border: none;
+             padding: 8px 20px; border-radius: 8px; font-weight: 700;
+             cursor: pointer; margin-top: 12px; font-size: .85rem; }
+    button:hover { opacity: .85; }
+    .pulse { animation: pulse 1.5s ease-in-out infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.5} }
+  </style>
+</head>
+<body>
+<header>
+  <h1>⚡ Gesture Control Dashboard</h1>
+  <div>
+    <span class="badge pulse" id="status">LIVE</span>
+    <span class="uptime" style="margin-left:14px" id="uptime">—</span>
+  </div>
+</header>
+
+<div class="grid">
+  <!-- Total events -->
+  <div class="card">
+    <h2>Total Gesture Events</h2>
+    <div class="metric" id="total">0</div>
+    <div class="metric-label">since session start</div>
+  </div>
+
+  <!-- Top gesture -->
+  <div class="card">
+    <h2>Top Gesture</h2>
+    <div class="metric" id="top-gesture" style="font-size:1.4rem">—</div>
+    <div class="metric-label" id="top-count">0 times</div>
+  </div>
+
+  <!-- Breakdown table -->
+  <div class="card" style="grid-column: span 2">
+    <h2>Gesture Breakdown</h2>
+    <table>
+      <thead><tr><th>Gesture</th><th>Count</th><th class="bar-cell">Frequency</th></tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+
+  <!-- Event log -->
+  <div class="card" style="grid-column: span 2">
+    <h2>Live Event Log</h2>
+    <div id="log"><div style="color:var(--muted)">Waiting for gestures…</div></div>
+  </div>
+
+  <!-- Controls -->
+  <div class="card">
+    <h2>Controls</h2>
+    <button onclick="resetStats()">🗑 Reset Stats</button>
+  </div>
+</div>
+
+<script>
+  const fmt = n => n.toFixed(1);
+  const fmtTime = ts => new Date(ts*1000).toLocaleTimeString();
+
+  async function fetchStats() {
+    try {
+      const r = await fetch('/api/stats');
+      const d = await r.json();
+      document.getElementById('total').textContent = d.total_events;
+      document.getElementById('uptime').textContent =
+        `Up: ${fmt(d.uptime_s)}s`;
+
+      // Breakdown
+      const entries = Object.entries(d.by_gesture).sort((a,b)=>b[1]-a[1]);
+      const max = entries[0]?.[1] || 1;
+      const tbody = document.getElementById('tbody');
+      tbody.innerHTML = entries.map(([g,n]) =>
+        `<tr><td>${g.replace(/_/g,' ')}</td><td>${n}</td>
+         <td class="bar-cell"><div class="bar" style="width:${Math.max(4,n/max*110)}px"></div></td></tr>`
+      ).join('');
+
+      if (entries[0]) {
+        document.getElementById('top-gesture').textContent =
+          entries[0][0].replace(/_/g,' ');
+        document.getElementById('top-count').textContent =
+          entries[0][1] + ' times';
+      }
+
+      // Log
+      const log = document.getElementById('log');
+      const recent = d.recent_log.slice(-30);
+      if (recent.length) {
+        log.innerHTML = recent.map(e =>
+          `<div>[${fmtTime(e.t)}] ${e.gesture} @(${e.x},${e.y})</div>`
+        ).join('');
+        log.scrollTop = log.scrollHeight;
+      }
+    } catch(e) { document.getElementById('status').textContent = 'OFFLINE'; }
+  }
+
+  async function resetStats() {
+    await fetch('/api/reset', {method:'POST'});
+    fetchStats();
+  }
+
+  fetchStats();
+  setInterval(fetchStats, 800);
+</script>
+</body>
+</html>

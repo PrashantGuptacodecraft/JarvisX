@@ -244,6 +244,155 @@ class HUDCanvas(tk.Canvas):
 
 
 # ═══════════════════════════════════════════════════════════════
+class DashRingCanvas(tk.Canvas):
+    """
+    Large cinematic ring for the Dashboard tab.
+    Three counter-rotating arcs, hex grid, animated stats text.
+    """
+    def __init__(self, parent, size=320, **kw):
+        super().__init__(parent, width=size, height=size,
+                         bg=BG0, highlightthickness=0, **kw)
+        self.W = self.H = size
+        self.cx = self.cy = size // 2
+        self._a1 = 0.0
+        self._a2 = 180.0
+        self._a3 = 90.0
+        self._pulse = 0.0
+        self._scan = 0.0
+        self._status = "sleeping"
+        self._running = True
+        self._particles = [{
+            "x": random.uniform(0, size),
+            "y": random.uniform(0, size),
+            "vx": random.uniform(-0.3, 0.3),
+            "vy": random.uniform(-0.3, 0.3),
+            "r": random.uniform(1, 2),
+        } for _ in range(40)]
+        self._draw()
+
+    def set_status(self, s):
+        self._status = s
+
+    def stop(self):
+        self._running = False
+
+    def _draw(self):
+        if not self._running:
+            return
+        color = STATUS_COLOR.get(self._status, CYAN)
+        speed = {"sleeping": 0.35, "listening": 2.5,
+                 "thinking": 5.0, "speaking": 1.8}.get(self._status, 1.0)
+        self._a1 = (self._a1 + speed)        % 360
+        self._a2 = (self._a2 - speed * 0.6)  % 360
+        self._a3 = (self._a3 + speed * 1.3)  % 360
+        self._pulse = (self._pulse + 0.06)    % (2 * math.pi)
+        self._scan  = (self._scan  + 1.2)     % 360
+        self.delete("all")
+        cx, cy = self.cx, self.cy
+        W = self.W
+
+        # deep bg
+        self.create_oval(0, 0, W, W, fill="#030609", outline="")
+
+        # particles
+        for p in self._particles:
+            p["x"] = (p["x"] + p["vx"]) % W
+            p["y"] = (p["y"] + p["vy"]) % W
+            r = p["r"]
+            self.create_oval(p["x"]-r, p["y"]-r, p["x"]+r, p["y"]+r,
+                             fill=self._blend(color, 35), outline="")
+
+        # hex grid
+        grid_step = int(W * 0.09)
+        for gx in range(0, W, grid_step):
+            for gy in range(0, W, grid_step):
+                dist = math.hypot(gx - cx, gy - cy)
+                if dist < W * 0.48:
+                    self.create_oval(gx-1, gy-1, gx+1, gy+1,
+                                     fill=self._blend(color, 12), outline="")
+
+        # scan line sweeping
+        sr = int(W * 0.46)
+        sx = cx + sr * math.cos(math.radians(self._scan))
+        sy = cy + sr * math.sin(math.radians(self._scan))
+        self.create_line(cx, cy, sx, sy,
+                         fill=self._blend(color, 30), width=1)
+
+        # concentric bg circles
+        for rad, col in [
+            (int(W*0.46), "#06101e"),
+            (int(W*0.38), "#070d18"),
+            (int(W*0.28), "#060c16"),
+        ]:
+            self.create_oval(cx-rad, cy-rad, cx+rad, cy+rad,
+                             fill=col, outline="")
+
+        # tick marks
+        outr = int(W * 0.455)
+        for i in range(72):
+            ang = math.radians(i * 5)
+            long_tick = i % 9 == 0
+            tlen = int(W * (0.04 if long_tick else 0.02))
+            x1 = cx + outr * math.cos(ang)
+            y1 = cy + outr * math.sin(ang)
+            x2 = cx + (outr - tlen) * math.cos(ang)
+            y2 = cy + (outr - tlen) * math.sin(ang)
+            alpha = 90 if long_tick else 30
+            self.create_line(x1, y1, x2, y2,
+                             fill=self._blend(color, alpha), width=1)
+
+        # arc rings
+        self._arc(cx, cy, int(W*0.43), self._a1, 260, color, 3)
+        self._arc(cx, cy, int(W*0.37), self._a2, 180,
+                  self._blend(color, 150), 2)
+        self._arc(cx, cy, int(W*0.28), self._a3, 120,
+                  self._blend(color, 100), 1)
+
+        # glow rings
+        pulse_r = int(W * 0.18) + int(3 * math.sin(self._pulse))
+        for rad, alpha in [(int(W*0.16), 15), (int(W*0.13), 30),
+                           (int(W*0.10), 55), (int(W*0.07), 100)]:
+            self.create_oval(cx-rad, cy-rad, cx+rad, cy+rad,
+                             fill=self._blend(color, alpha), outline="")
+
+        # center hex + J
+        pts = []
+        for i in range(6):
+            a = math.radians(60*i - 30)
+            s = int(W * 0.075)
+            pts.extend([cx + s*math.cos(a), cy + s*math.sin(a)])
+        self.create_polygon(pts, fill=BG0, outline=color, width=1)
+        self.create_text(cx, cy, text="J", fill=color,
+                         font=("Consolas", int(W*0.075)+2, "bold"))
+
+        # pulsing outer ring
+        pr = int(W*0.47) + int(2*math.sin(self._pulse*2))
+        self.create_oval(cx-pr, cy-pr, cx+pr, cy+pr,
+                         outline=self._blend(color, 50), width=1)
+
+        self.after(35, self._draw)
+
+    def _arc(self, cx, cy, r, start, extent, color, width):
+        self.create_arc(cx-r, cy-r, cx+r, cy+r,
+                        start=start, extent=extent,
+                        outline=color, width=width, style="arc")
+
+    @staticmethod
+    def _blend(hex_color: str, alpha: int) -> str:
+        try:
+            r = int(hex_color[1:3], 16)
+            g = int(hex_color[3:5], 16)
+            b = int(hex_color[5:7], 16)
+            t = alpha / 255
+            nr = int(4  + (r-4)  * t)
+            ng = int(8  + (g-8)  * t)
+            nb = int(16 + (b-16) * t)
+            return f"#{nr:02x}{ng:02x}{nb:02x}"
+        except Exception:
+            return hex_color
+
+
+# ═══════════════════════════════════════════════════════════════
 class WaveformBar(tk.Canvas):
     """Animated audio waveform displayed when JARVIS speaks."""
     def __init__(self, parent, **kw):
@@ -686,6 +835,7 @@ class JarvisGUI:
         self._nb.grid(row=0, column=0, sticky="nsew")
 
         for _tab_builder, _tab_name in [
+            (self._build_dashboard_tab, "DASHBOARD"),
             (self._build_chat_tab,     "CHAT"),
             (self._build_terminal_tab, "TERMINAL"),
             (self._build_system_tab,   "SYSTEM"),
@@ -734,6 +884,197 @@ class JarvisGUI:
         inner.pack(fill="both", expand=True, padx=12, pady=10)
         tk.Label(inner, text=label, font=self._fonts["section"], fg=TEXT2, bg=BG1).pack(anchor="w")
         tk.Label(inner, textvariable=value_var, font=self._fonts["body_lg"], fg=TEXT1, bg=BG1).pack(anchor="w")
+
+    # ── Dashboard tab ────────────────────────────────────────
+    def _build_dashboard_tab(self):
+        f = tk.Frame(self._nb, bg=BG0)
+        self._nb.add(f, text="  ⬡ DASHBOARD  ")
+        f.columnconfigure(0, weight=1)
+        f.columnconfigure(1, weight=1)
+        f.rowconfigure(1, weight=1)
+
+        # ── Mission banner ───────────────────────────────────
+        banner = tk.Frame(f, bg="#050d1a", height=52)
+        banner.grid(row=0, column=0, columnspan=2, sticky="ew")
+        banner.grid_propagate(False)
+        tk.Frame(banner, bg=CYAN, height=2).pack(fill="x", side="top")
+        inner_b = tk.Frame(banner, bg="#050d1a")
+        inner_b.pack(fill="both", expand=True, padx=18, pady=6)
+
+        # animated mission text
+        self._dash_mission_var = tk.StringVar(
+            value=f"  ◈  J.A.R.V.I.S  ADVANCED AI SYSTEM  ◈  OPERATOR: {USER_NAME.upper()}  ◈  ALL SYSTEMS NOMINAL")
+        self._dash_mission_offset = [0]
+        mission_lbl = tk.Label(inner_b, textvariable=self._dash_mission_var,
+                               font=("Consolas", 10, "bold"),
+                               fg=CYAN, bg="#050d1a", anchor="w")
+        mission_lbl.pack(side="left", fill="x", expand=True)
+
+        mode_badge = tk.Label(inner_b,
+            text=" OPERATOR MODE " if OPERATOR_MODE else " SAFE MODE ",
+            font=("Consolas", 9, "bold"),
+            fg=BG0, bg=GREEN if OPERATOR_MODE else AMBER, padx=4)
+        mode_badge.pack(side="right", padx=(8, 0))
+
+        # ── Left column: ring + live stats ──────────────────
+        left = tk.Frame(f, bg=BG0)
+        left.grid(row=1, column=0, sticky="nsew", padx=(12, 6), pady=10)
+        left.columnconfigure(0, weight=1)
+
+        # big ring
+        self._dash_ring = DashRingCanvas(left, size=290)
+        self._dash_ring.pack(pady=(8, 4))
+
+        # live clock under ring
+        self._dash_clock_var = tk.StringVar(value="")
+        tk.Label(left, textvariable=self._dash_clock_var,
+                 font=("Consolas", 22, "bold"),
+                 fg=CYAN, bg=BG0).pack()
+        self._dash_date_var = tk.StringVar(value="")
+        tk.Label(left, textvariable=self._dash_date_var,
+                 font=("Consolas", 10),
+                 fg=TEXT2, bg=BG0).pack(pady=(0, 8))
+
+        # uptime + session
+        info_f = tk.Frame(left, bg=BG0)
+        info_f.pack(fill="x", padx=10)
+        self._dash_uptime_var  = tk.StringVar(value="UPTIME:  00:00:00")
+        self._dash_session_var = tk.StringVar(value="SESSION: ACTIVE")
+        for var, col in [(self._dash_uptime_var, TEXT2),
+                         (self._dash_session_var, GREEN)]:
+            tk.Label(info_f, textvariable=var,
+                     font=("Consolas", 9), fg=col, bg=BG0,
+                     anchor="w").pack(fill="x")
+
+        # ── Right column: stat cards + quick actions ─────────
+        right = tk.Frame(f, bg=BG0)
+        right.grid(row=1, column=1, sticky="nsew", padx=(6, 12), pady=10)
+        right.columnconfigure(0, weight=1)
+        right.columnconfigure(1, weight=1)
+
+        # stat card grid 2×2
+        stat_grid = tk.Frame(right, bg=BG0)
+        stat_grid.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 10))
+        stat_grid.columnconfigure(0, weight=1)
+        stat_grid.columnconfigure(1, weight=1)
+
+        self._dash_cpu_var  = tk.StringVar(value="--")
+        self._dash_ram_var  = tk.StringVar(value="--")
+        self._dash_net_var  = tk.StringVar(value="ONLINE")
+        self._dash_ai_var   = tk.StringVar(value="GROQ")
+
+        cards_def = [
+            ("CPU",     self._dash_cpu_var,  CYAN,   "◈", 0, 0),
+            ("RAM",     self._dash_ram_var,  GREEN,  "◉", 0, 1),
+            ("NETWORK", self._dash_net_var,  BLUE,   "◆", 1, 0),
+            ("AI CORE", self._dash_ai_var,   PURPLE, "⬡", 1, 1),
+        ]
+        for label, var, accent, icon, row_, col_ in cards_def:
+            self._make_dash_card(stat_grid, row_, col_, label, var, accent, icon)
+
+        # divider
+        tk.Frame(right, bg=BORDER, height=1).grid(
+            row=1, column=0, columnspan=2, sticky="ew", pady=6)
+
+        # quick action label
+        tk.Label(right, text="  QUICK ACTIONS",
+                 font=("Consolas", 9, "bold"), fg=TEXT2, bg=BG0,
+                 anchor="w").grid(row=2, column=0, columnspan=2, sticky="w")
+
+        # 3×2 quick-action buttons
+        actions = [
+            ("⏰ TIME",      "what time is it",           CYAN),
+            ("💻 SYSTEM",   "cpu usage and ram usage",   GREEN),
+            ("🌐 BROWSER",  "open google",               BLUE),
+            ("📸 SCREENSHOT","take a screenshot",         AMBER),
+            ("📂 FILES",    "open downloads folder",     PURPLE),
+            ("👁 VISION",   "look at me and describe what you see", RED),
+        ]
+        qa_frame = tk.Frame(right, bg=BG0)
+        qa_frame.grid(row=3, column=0, columnspan=2, sticky="ew", pady=4)
+        for idx, (label, cmd, accent) in enumerate(actions):
+            r_, c_ = divmod(idx, 3)
+            btn = tk.Button(
+                qa_frame, text=label,
+                bg=BG1, fg=TEXT1,
+                activebackground=accent, activeforeground=BG0,
+                font=("Consolas", 8, "bold"),
+                relief="flat", cursor="hand2",
+                padx=6, pady=8, borderwidth=0,
+                command=lambda c=cmd: self._quick_cmd(c)
+            )
+            btn.grid(row=r_, column=c_, padx=2, pady=2, sticky="ew")
+            qa_frame.columnconfigure(c_, weight=1)
+            # hover glow
+            btn.bind("<Enter>",
+                     lambda e, b=btn, a=accent: b.configure(bg=a, fg=BG0))
+            btn.bind("<Leave>",
+                     lambda e, b=btn: b.configure(bg=BG1, fg=TEXT1))
+
+        # status strip at bottom
+        tk.Frame(right, bg=BORDER, height=1).grid(
+            row=4, column=0, columnspan=2, sticky="ew", pady=6)
+        strip = tk.Frame(right, bg=BG0)
+        strip.grid(row=5, column=0, columnspan=2, sticky="ew")
+        dots = [
+            ("●", GREEN,  "VOICE ACTIVE"),
+            ("●", CYAN,   "AI PROVIDER"),
+            ("●", BLUE,   "MEMORY DB"),
+            ("●", PURPLE, "GESTURE"),
+        ]
+        for dot, col, tip in dots:
+            frm = tk.Frame(strip, bg=BG0)
+            frm.pack(side="left", padx=6)
+            tk.Label(frm, text=dot, fg=col, bg=BG0,
+                     font=("Consolas", 8)).pack(side="left")
+            tk.Label(frm, text=tip, fg=TEXT2, bg=BG0,
+                     font=("Consolas", 7)).pack(side="left")
+
+        # start dashboard updater
+        self._dash_start_time = time.time()
+        self._dash_update()
+
+    def _make_dash_card(self, parent, row, col, label, var, accent, icon):
+        card = tk.Frame(parent, bg=BG1, highlightthickness=1,
+                        highlightbackground=BORDER)
+        card.grid(row=row, column=col, padx=3, pady=3, sticky="nsew")
+        tk.Frame(card, bg=accent, height=3).pack(fill="x")
+        inner = tk.Frame(card, bg=BG1)
+        inner.pack(fill="both", padx=10, pady=8)
+        tk.Label(inner, text=f"{icon}  {label}",
+                 font=("Consolas", 8, "bold"),
+                 fg=TEXT2, bg=BG1, anchor="w").pack(fill="x")
+        tk.Label(inner, textvariable=var,
+                 font=("Consolas", 18, "bold"),
+                 fg=accent, bg=BG1, anchor="w").pack(fill="x")
+
+    def _dash_update(self):
+        """Update dashboard live values every second."""
+        if not self._running:
+            return
+        # clock
+        now = datetime.datetime.now()
+        self._dash_clock_var.set(now.strftime("%H:%M:%S"))
+        self._dash_date_var.set(now.strftime("%A, %d %B %Y"))
+        # uptime
+        elapsed = int(time.time() - self._dash_start_time)
+        h, rem = divmod(elapsed, 3600)
+        m, s   = divmod(rem, 60)
+        self._dash_uptime_var.set(f"UPTIME:  {h:02d}:{m:02d}:{s:02d}")
+        # cpu / ram
+        try:
+            import psutil
+            self._dash_cpu_var.set(f"{psutil.cpu_percent(interval=None):.0f}%")
+            self._dash_ram_var.set(f"{psutil.virtual_memory().percent:.0f}%")
+        except Exception:
+            pass
+        # scrolling mission text
+        raw = f"  ◈  J.A.R.V.I.S  ADVANCED AI SYSTEM  ◈  OPERATOR: {USER_NAME.upper()}  ◈  ALL SYSTEMS NOMINAL  ◈  {now.strftime('%H:%M:%S')}"
+        off = self._dash_mission_offset[0]
+        display = raw[off:] + "   " + raw[:off]
+        self._dash_mission_var.set(display[:80])
+        self._dash_mission_offset[0] = (off + 1) % len(raw)
+        self.root.after(100, self._dash_update)
 
     # ── Chat tab ────────────────────────────────────────────
     def _build_chat_tab(self):

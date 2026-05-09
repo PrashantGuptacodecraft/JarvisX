@@ -1,4 +1,11 @@
-"""voice/speaker.py - natural-sounding TTS with human female voice profiles."""
+"""voice/speaker.py — JARVIS: brilliant, warm, human-sounding female AI voice.
+Golden rules applied via SSML:
+  - Natural pauses after Hmm/Right/So/Wait (300–600ms)
+  - Subtle pitch drops (-3%) at sentence ends → sounds conclusive, not robotic
+  - Emphasis on 1-2 key words max per sentence
+  - Mixed prosody rates (slow for emotive, fast for informational)
+  - Edge NeerjaExpressiveNeural / AriaNeural for best SSML support
+"""
 
 from __future__ import annotations
 
@@ -29,42 +36,181 @@ from config.settings import (
 
 log = get_logger("speaker")
 
+# ── Voice profiles ────────────────────────────────────────────────────────────
 VOICE_PROFILES = {
+    # Primary: warm, expressive Indian-English — best SSML support
     "human_girl": {
-        "edge_voice": "en-IN-NeerjaExpressiveNeural",
-        "rate": "-8%",
-        "pitch": "+1Hz",
-        "volume": "+0%",
-        "pyttsx3_rate": 158,
+        "edge_voice":            "en-IN-NeerjaExpressiveNeural",
+        "rate":                  "-6%",
+        "pitch":                 "+0Hz",
+        "volume":                "+0%",
+        "ssml_style":            "chat",       # mstts:express-as style
+        "ssml_style_degree":     "1.2",
+        "pyttsx3_rate":          158,
         "pyttsx3_voice_keywords": ["neerja", "zira", "female", "hazel", "aria"],
     },
-    "cute_girl": {
-        "edge_voice": "en-US-AvaMultilingualNeural",
-        "rate": "-6%",
-        "pitch": "+8Hz",
-        "volume": "+0%",
-        "pyttsx3_rate": 165,
-        "pyttsx3_voice_keywords": ["zira", "aria", "ava", "female", "hazel"],
+    # Confident US female — great for assistant persona
+    "aria": {
+        "edge_voice":            "en-US-AriaNeural",
+        "rate":                  "-4%",
+        "pitch":                 "+0Hz",
+        "volume":                "+0%",
+        "ssml_style":            "chat",
+        "ssml_style_degree":     "1.3",
+        "pyttsx3_rate":          162,
+        "pyttsx3_voice_keywords": ["aria", "zira", "female"],
     },
-    "warm_indian": {
-        "edge_voice": "en-IN-NeerjaExpressiveNeural",
-        "rate": "-3%",
-        "pitch": "+4Hz",
-        "volume": "+0%",
-        "pyttsx3_rate": 168,
-        "pyttsx3_voice_keywords": ["neerja", "zira", "female", "hazel"],
+    # Warm friendly US — Jenny is excellent for natural conversation
+    "jenny": {
+        "edge_voice":            "en-US-JennyNeural",
+        "rate":                  "-5%",
+        "pitch":                 "+0Hz",
+        "volume":                "+0%",
+        "ssml_style":            "chat",
+        "ssml_style_degree":     "1.2",
+        "pyttsx3_rate":          160,
+        "pyttsx3_voice_keywords": ["zira", "female", "hazel"],
     },
+    # Soft British — elegant, calm
     "soft_british": {
-        "edge_voice": "en-GB-SoniaNeural",
-        "rate": "-5%",
-        "pitch": "+3Hz",
-        "volume": "+0%",
-        "pyttsx3_rate": 160,
+        "edge_voice":            "en-GB-SoniaNeural",
+        "rate":                  "-5%",
+        "pitch":                 "+0Hz",
+        "volume":                "+0%",
+        "ssml_style":            "chat",
+        "ssml_style_degree":     "1.0",
+        "pyttsx3_rate":          158,
         "pyttsx3_voice_keywords": ["sonia", "hazel", "female"],
+    },
+    # Cheerful cute — higher energy
+    "cute_girl": {
+        "edge_voice":            "en-US-AvaMultilingualNeural",
+        "rate":                  "-3%",
+        "pitch":                 "+0Hz",
+        "volume":                "+0%",
+        "ssml_style":            "cheerful",
+        "ssml_style_degree":     "1.5",
+        "pyttsx3_rate":          168,
+        "pyttsx3_voice_keywords": ["zira", "ava", "female"],
     },
 }
 
+# ── SSML golden-rule helpers ──────────────────────────────────────────────────
+_FILLER_PAUSES = {
+    "Hmm":    "450ms", "Hmm,":   "450ms",
+    "Right":  "350ms", "Right,": "350ms",
+    "So":     "300ms", "So,":    "300ms",
+    "Well":   "350ms", "Well,":  "350ms",
+    "Wait":   "400ms", "Wait,":  "400ms",
+    "Now":    "250ms", "Now,":   "250ms",
+    "Look":   "250ms", "Look,":  "250ms",
+    "Okay":   "350ms", "Okay,":  "350ms",
+    "OK":     "300ms", "OK,":    "300ms",
+    "Actually": "300ms", "Actually,": "300ms",
+}
+
+# Words to auto-emphasise when they appear in a sentence (max 1 per sentence)
+_EMPHASIS_WORDS = {
+    "absolutely", "exactly", "definitely", "certainly", "really",
+    "never", "always", "immediately", "important", "critical",
+    "please", "sorry", "love", "great", "perfect", "done",
+}
+
 DEFAULT_PROFILE = VOICE_PROFILES["human_girl"]
+
+
+def _humanize_to_ssml(text: str, voice: str, profile: dict) -> str:
+    """
+    Convert plain text to expressive SSML following the golden rules:
+    1. Natural pauses after filler words (Hmm, Right, So, Wait…)
+    2. Subtle pitch drop (-3%) on sentence endings → conclusive, not robotic
+    3. One emphasis word per sentence max
+    4. Express-as style wrapper for NeerjaExpressiveNeural / AriaNeural / JennyNeural
+    5. Mixed prosody — slightly slower for emotional sentences
+    """
+    import re
+
+    style       = profile.get("ssml_style", "chat")
+    style_deg   = profile.get("ssml_style_degree", "1.2")
+    global_rate = profile.get("rate", "-5%")
+
+    # ── Split into sentences ──────────────────────────────────────────────────
+    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+    ssml_parts = []
+
+    for sent in sentences:
+        sent = sent.strip()
+        if not sent:
+            continue
+
+        tokens    = sent.split()
+        out       = []
+        emph_done = False
+
+        for i, tok in enumerate(tokens):
+            # Rule 1: filler word → insert pause after it
+            if tok in _FILLER_PAUSES:
+                pause = _FILLER_PAUSES[tok]
+                out.append(f'{tok}<break time="{pause}"/>')
+                continue
+
+            # Rule 3: one emphasis per sentence
+            clean = re.sub(r'[^a-z]', '', tok.lower())
+            if not emph_done and clean in _EMPHASIS_WORDS:
+                out.append(f'<emphasis level="moderate">{tok}</emphasis>')
+                emph_done = True
+                continue
+
+            out.append(tok)
+
+        sentence_body = ' '.join(out)
+
+        # Rule 2: subtle pitch drop at sentence end for conclusive sound
+        ends_declarative = sent.endswith('.') or sent.endswith(',')
+        if ends_declarative and len(tokens) > 4:
+            # Wrap last 2 words in slight pitch-down prosody
+            words = sentence_body.rsplit(' ', 2)
+            if len(words) == 3:
+                tail  = ' '.join(words[1:])
+                sentence_body = (
+                    words[0]
+                    + ' <prosody pitch="-3%" rate="-3%">' + tail + '</prosody>'
+                )
+
+        # Rule 4: slow emotive sentences slightly
+        emotive_words = {"sorry", "unfortunately", "afraid", "miss", "love", "care", "please"}
+        if any(w in sent.lower() for w in emotive_words):
+            sentence_body = f'<prosody rate="-8%">{sentence_body}</prosody>'
+
+        ssml_parts.append(sentence_body)
+
+    inner = '  '.join(ssml_parts)
+
+    # ── Wrap in express-as if voice supports it ───────────────────────────────
+    expressive_voices = {
+        "neerjaexpressive", "aria", "jenny", "sonia", "ava",
+        "guy", "davis", "tony", "jane",
+    }
+    voice_key = voice.lower().replace("-", "").replace("neural", "")
+    use_express = any(v in voice_key for v in expressive_voices)
+
+    if use_express:
+        inner = (
+            f'<mstts:express-as style="{style}" styledegree="{style_deg}">'
+            f'{inner}</mstts:express-as>'
+        )
+
+    ssml = (
+        '<speak version="1.0" '
+        'xmlns="http://www.w3.org/2001/10/synthesis" '
+        'xmlns:mstts="https://www.w3.org/2001/mstts" '
+        'xml:lang="en-US">'
+        f'<voice name="{voice}">'
+        f'<prosody rate="{global_rate}">'
+        f'{inner}'
+        '</prosody></voice></speak>'
+    )
+    return ssml
 
 
 class Speaker:
@@ -345,19 +491,35 @@ class Speaker:
         print(f"\n[JARVIS] {text}\n")
 
     def _edge(self, text: str):
+        """Edge TTS with SSML humanisation via golden rules."""
         import edge_tts
 
+        # Build expressive SSML
+        ssml = _humanize_to_ssml(text, self.edge_voice, self.profile)
+
         async def _synthesize():
+            # edge_tts.Communicate accepts raw SSML when text starts with <speak
             communicate = edge_tts.Communicate(
-                text=text,
+                text=ssml,
                 voice=self.edge_voice,
                 rate=self.edge_rate,
                 pitch=self.edge_pitch,
                 volume=self.edge_volume,
             )
-            with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as file_handle:
-                tmp_path = file_handle.name
-            await communicate.save(tmp_path)
+            with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as fh:
+                tmp_path = fh.name
+            try:
+                await communicate.save(tmp_path)
+            except Exception:
+                # SSML rejected by server — fall back to plain text
+                communicate = edge_tts.Communicate(
+                    text=text,
+                    voice=self.edge_voice,
+                    rate=self.edge_rate,
+                    pitch=self.edge_pitch,
+                    volume=self.edge_volume,
+                )
+                await communicate.save(tmp_path)
             return tmp_path
 
         loop = asyncio.new_event_loop()
