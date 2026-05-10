@@ -174,7 +174,7 @@ class GestureController:
             elif gesture == G_SHOT_SEL:
                 # Region screenshot completed by engine — notify via JARVIS
                 if self.command_queue:
-                    self.command_queue.put("Region screenshot saved to Pictures folder.")
+                    self.command_queue.put("Screenshot saved.")
 
             elif gesture == G_WAKE:
                 if self.command_queue:

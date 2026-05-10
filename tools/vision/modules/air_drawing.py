@@ -9,6 +9,7 @@ IN DRAW MODE:
   👌 Pinch            = Next BRUSH  (hold 0.3s to confirm, no false triggers)
   🤘 Rock sign        = Next COLOR  (hold 0.3s to confirm)
   🖐 Open palm        = UNDO
+  👎 Thumb down 0.6s   = TOGGLE AUTO-CORRECT
   ✊ Fist hold 0.8s   = SAVE + EXIT (countdown shown)
 """
 from __future__ import annotations
@@ -30,9 +31,8 @@ BRUSH_SIZES    = {"Pen":3,"Marker":12,"Spray":20,"Neon":4,"Chalk":9,"Eraser":35}
 # ── Timing ────────────────────────────────────────────────────────────────────
 ENTER_HOLD   = 1.5   # Three fingers hold time to activate drawing
 EXIT_HOLD    = 0.8   # Fist hold time to save & exit
+TOGGLE_HOLD  = 0.6   # Thumb-down hold time to toggle auto-correct
 ACTION_HOLD  = 0.35  # Brush/color change hold time
-UNDO_CD      = 0.5   # Undo cooldown
-SNAP_PAUSE   = 0.7   # Shape snap pause
 
 _SAVE_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(
@@ -53,7 +53,10 @@ def _classify_draw(lm) -> str:
     mid   = _ext(lm, 12, 9)
     ring  = _ext(lm, 16,13)
     pinky = _ext(lm, 20,17)
-    all_bent = not any([idx,mid,ring,pinky])
+    thumb_bent = lm[4].y >= lm[3].y - 0.01  # thumb tip below IP
+    thumb_down = lm[4].y > lm[0].y + 0.05  # thumb tip below wrist
+    if not any([idx,mid,ring,pinky]) and thumb_down: return "AUTO_TOGGLE"
+    all_bent = not any([idx,mid,ring,pinky]) and thumb_bent
     if all_bent:                                  return "EXIT"
     if idx and mid and ring and pinky:            return "UNDO"
     if idx and pinky and not mid and not ring:    return "COLOR"
@@ -87,6 +90,11 @@ class AirDrawing:
         self._palm_t   = 0.0
         # Exit
         self._fist_t   = 0.0
+        self._fist_started = False
+        # Auto-correct toggle
+        self._toggle_t = 0.0
+        self._toggle_started = False
+        self._auto_correct = True
         # Action hold (brush/color) — must be held ACTION_HOLD before firing
         self._action_g  = ""
         self._action_t  = 0.0
@@ -95,7 +103,8 @@ class AirDrawing:
         self._last_undo = 0.0
         # Shape snap
         self._last_draw_t = 0.0
-        self._snap_done   = False
+        self._shape_label = ""
+        self._shape_label_t = 0.0
         # Fullscreen window size — use defaults, will detect on first draw
         self._fw = 1280
         self._fh = 720
@@ -142,22 +151,43 @@ class AirDrawing:
 
         g = _classify_draw(lm)
 
-        # ── EXIT: fist hold ───────────────────────────────────────────────────
-        if g == "EXIT":
-            if self._fist_t == 0.0: self._fist_t = now
+        # ── AUTO-CORRECT TOGGLE: thumb-down ──────────────────────────────────────
+        if g == "AUTO_TOGGLE":
+            if self._toggle_t == 0.0:
+                self._toggle_t = now
+                self._toggle_started = True
+            hold = now - self._toggle_t
+            self._draw_countdown(display, hold, TOGGLE_HOLD, "TOGGLING AUTO…", (220,200,0))
+            if hold >= TOGGLE_HOLD:
+                self._auto_correct = not self._auto_correct
+                self._saved_msg = "Auto correction " + ("ON" if self._auto_correct else "OFF")
+                self._saved_msg_t = now
+                self._toggle_t = 0.0
+                self._toggle_started = False
+            self._blend(display)
+            cv2.imshow(_WIN, display); cv2.waitKey(1)
+            return
+        elif g == "EXIT":
+            if self._fist_t == 0.0:
+                self._fist_t = now
+                self._fist_started = True
             hold = now - self._fist_t
             self._draw_countdown(display, hold, EXIT_HOLD, "SAVING…", (0,80,255))
             if hold >= EXIT_HOLD:
                 self._save(display)
                 self._active = False
                 self._fist_t = 0.0
+                self._fist_started = False
                 try: cv2.destroyWindow(_WIN)
                 except Exception: pass
             self._blend(display)
             cv2.imshow(_WIN, display); cv2.waitKey(1)
             return
         else:
+            self._toggle_t = 0.0
+            self._toggle_started = False
             self._fist_t = 0.0
+            self._fist_started = False
 
         # ── ACTION gestures: require hold of ACTION_HOLD seconds ──────────────
         if g in ("BRUSH","COLOR","UNDO"):
@@ -180,7 +210,6 @@ class AirDrawing:
             ty = int(lm[8].y * self._fh)
             self._buf.append((tx, ty))
             self._last_draw_t = now
-            self._snap_done   = False
 
             if len(self._buf) >= 2:
                 # Weighted average — heavier on recent points for responsiveness
@@ -277,9 +306,7 @@ class AirDrawing:
 
     def _commit_stroke(self, now: float):
         if self._cur and len(self._cur.points) > 1:
-            if now - self._last_draw_t > SNAP_PAUSE and not self._snap_done:
-                self._snap(self._cur)
-                self._snap_done = True
+            self._snap(self._cur)
             self._strokes.append(self._cur)
         self._cur = None; self._prev_pt = None; self._buf.clear()
 
@@ -337,63 +364,122 @@ class AirDrawing:
         pts = np.array(stroke.points, dtype=np.int32)
         if len(pts) < 8: return
         try:
-            hull = cv2.convexHull(pts)
+            contour = pts
+            if not np.array_equal(pts[0], pts[-1]):
+                contour = np.vstack([pts, pts[0]])
+            hull = cv2.convexHull(contour)
             area = cv2.contourArea(hull)
-            peri = cv2.arcLength(pts, False)
-            if peri == 0: return
+            peri = cv2.arcLength(hull, True)
+            if peri == 0 or area == 0: return
             compact = 4*math.pi*area / (peri**2)
             col  = stroke.color; t = max(2,stroke.size)
             bgra = (*col,255)
-            # Circle detection (compact >= 0.72)
-            if compact > 0.72:
-                (cx,cy),r = cv2.minEnclosingCircle(pts)
-                self._canvas[:]=0
-                for s in self._strokes[:-1]:
-                    for i in range(1,len(s.points)):
-                        self._interpolate_paint(self._canvas,s.points[i-1],s.points[i],s)
+
+            approx = cv2.approxPolyDP(hull, max(0.02*peri, 10), True)
+            num_sides = len(approx)
+            rect = cv2.minAreaRect(hull)
+            rect_area = rect[1][0] * rect[1][1] if rect[1][0] and rect[1][1] else 0
+            fill_ratio = rect_area and area / rect_area or 0
+
+            if num_sides == 3 and area > 160:
+                self._set_shape_label("TRIANGLE")
+                self._redraw_except_last()
+                cv2.polylines(self._canvas, [approx], True, bgra, t, cv2.LINE_AA)
+                log.info("Shape → TRIANGLE")
+
+            elif self._looks_like_rectangle(approx, fill_ratio):
+                self._set_shape_label("RECTANGLE")
+                box = cv2.boxPoints(rect)
+                box = np.int0(box)
+                self._redraw_except_last()
+                cv2.drawContours(self._canvas, [box], 0, bgra, t)
+                log.info("Shape → RECTANGLE")
+
+            elif num_sides > 7 and compact > 0.85 and fill_ratio > 0.55:
+                self._set_shape_label("CIRCLE")
+                (cx,cy),r = cv2.minEnclosingCircle(hull)
+                self._redraw_except_last()
                 cv2.circle(self._canvas,(int(cx),int(cy)),int(r),bgra,t,cv2.LINE_AA)
                 log.info("Shape → CIRCLE")
-            # Rectangle/square detection (0.55 < compact < 0.72)
-            elif compact > 0.55:
-                x,y,rw,rh = cv2.boundingRect(pts)
-                if rw*rh > 0 and area/(rw*rh) > 0.55:
-                    self._canvas[:]=0
-                    for s in self._strokes[:-1]:
-                        for i in range(1,len(s.points)):
-                            self._interpolate_paint(self._canvas,s.points[i-1],s.points[i],s)
-                    cv2.rectangle(self._canvas,(x,y),(x+rw,y+rh),bgra,t,cv2.LINE_AA)
-                    log.info("Shape → RECTANGLE")
-            # Triangle/polygon detection
-            else:
-                approx = cv2.approxPolyDP(hull, 0.02*peri, True)
-                if len(approx) == 3:
-                    self._canvas[:]=0
-                    for s in self._strokes[:-1]:
-                        for i in range(1,len(s.points)):
-                            self._interpolate_paint(self._canvas,s.points[i-1],s.points[i],s)
-                    cv2.polylines(self._canvas, [approx], True, bgra, t, cv2.LINE_AA)
-                    log.info("Shape → TRIANGLE")
-                elif len(approx) == 4:
-                    self._canvas[:]=0
-                    for s in self._strokes[:-1]:
-                        for i in range(1,len(s.points)):
-                            self._interpolate_paint(self._canvas,s.points[i-1],s.points[i],s)
-                    cv2.polylines(self._canvas, [approx], True, bgra, t, cv2.LINE_AA)
-                    log.info("Shape → QUADRILATERAL")
-                elif len(pts) >= 2:
-                    # Line detection: check if points are roughly collinear
+
+            elif num_sides == 4:
+                self._set_shape_label("QUADRILATERAL")
+                self._redraw_except_last()
+                cv2.polylines(self._canvas, [approx], True, bgra, t, cv2.LINE_AA)
+                log.info("Shape → QUADRILATERAL")
+
+            elif len(pts) >= 10:
+                w, h = rect[1]
+                if w == 0 or h == 0: return
+                aspect = max(w,h) / min(w,h)
+                if aspect > 10 and area / (w*h) < 0.35:
+                    self._set_shape_label("LINE")
                     p1, p2 = tuple(map(int, pts[0])), tuple(map(int, pts[-1]))
-                    fit_line = cv2.fitLine(pts, cv2.DIST_L2, 0, 0.01, 0.01)
-                    _, _, vx, vy = fit_line
-                    if abs(vx) > 0 or abs(vy) > 0:
-                        self._canvas[:]=0
-                        for s in self._strokes[:-1]:
-                            for i in range(1,len(s.points)):
-                                self._interpolate_paint(self._canvas,s.points[i-1],s.points[i],s)
-                        cv2.line(self._canvas, p1, p2, bgra, t, cv2.LINE_AA)
-                        log.info("Shape → LINE")
+                    self._redraw_except_last()
+                    cv2.line(self._canvas, p1, p2, bgra, t, cv2.LINE_AA)
+                    log.info("Shape → LINE")
+            else:
+                self._shape_label = ""
         except Exception as e:
             log.debug("Snap err: %s", e)
+
+    def _is_rectangle(self, approx):
+        if len(approx) != 4: return False
+        points = approx.reshape(4, 2)
+        vectors = []
+        for i in range(4):
+            p1 = points[i]
+            p2 = points[(i+1)%4]
+            vectors.append((p2[0]-p1[0], p2[1]-p1[1]))
+        angles = []
+        for i in range(4):
+            v1 = vectors[i]
+            v2 = vectors[(i+1)%4]
+            dot = v1[0]*v2[0] + v1[1]*v2[1]
+            mag1 = math.hypot(v1[0], v1[1])
+            mag2 = math.hypot(v2[0], v2[1])
+            if mag1 == 0 or mag2 == 0: return False
+            cos_angle = dot / (mag1 * mag2)
+            angle = math.acos(max(-1, min(1, cos_angle)))
+            angles.append(math.degrees(angle))
+        for a in angles:
+            if not 75 < a < 105: return False
+        return True
+
+    def _looks_like_rectangle(self, approx, fill_ratio):
+        if len(approx) == 4 and self._is_rectangle(approx):
+            return True
+        if len(approx) in (5, 6) and fill_ratio > 0.65:
+            return self._has_rectangular_angles(approx)
+        return False
+
+    def _has_rectangular_angles(self, approx):
+        points = approx.reshape(-1, 2)
+        if len(points) < 4:
+            return False
+        vectors = []
+        for i in range(len(points)):
+            p1 = points[i]
+            p2 = points[(i+1) % len(points)]
+            vectors.append((p2[0]-p1[0], p2[1]-p1[1]))
+        for i in range(len(vectors)):
+            v1 = vectors[i]
+            v2 = vectors[(i+1) % len(vectors)]
+            mag1 = math.hypot(v1[0], v1[1])
+            mag2 = math.hypot(v2[0], v2[1])
+            if mag1 == 0 or mag2 == 0:
+                return False
+            cos_angle = (v1[0]*v2[0] + v1[1]*v2[1]) / (mag1 * mag2)
+            angle = math.degrees(math.acos(max(-1.0, min(1.0, cos_angle))))
+            if not 65 < angle < 115:
+                return False
+        return True
+
+    def _redraw_except_last(self):
+        self._canvas[:]=0
+        for s in self._strokes[:-1]:
+            for i in range(1, len(s.points)):
+                self._interpolate_paint(self._canvas, s.points[i-1], s.points[i], s)
 
     def _blend(self, frame):
         if self._canvas is None: return
@@ -401,6 +487,10 @@ class AirDrawing:
         np.copyto(frame,
                   (frame.astype(np.float32)*(1-a) +
                    self._canvas[:,:,:3].astype(np.float32)*a).astype(np.uint8))
+
+    def _set_shape_label(self, label: str):
+        self._shape_label = label
+        self._shape_label_t = time.time()
 
     def _detect_screen_size(self) -> tuple[int, int]:
         try:
@@ -445,7 +535,7 @@ class AirDrawing:
 
         # Top banner
         cv2.rectangle(frame,(0,0),(fw,42),(0,0,0),-1)
-        cv2.putText(frame,"  ✌ LIFT/PAUSE  |  👌 BRUSH  |  🤘 COLOR  |  🖐 UNDO  |  ✊hold EXIT",
+        cv2.putText(frame,"  ✌ LIFT/PAUSE  |  👌 BRUSH  |  🤘 COLOR  |  🖐 UNDO  |  👎hold AUTO  |  ✊hold EXIT",
                     (10,28),cv2.FONT_HERSHEY_SIMPLEX,0.6,(0,220,255),1,cv2.LINE_AA)
 
         # Top-right: brush swatch + name
@@ -463,6 +553,9 @@ class AirDrawing:
                     cv2.FONT_HERSHEY_SIMPLEX,0.7,state_col,2,cv2.LINE_AA)
         cv2.putText(frame,f"Strokes:{len(self._strokes)}",(fw-140,fh-14),
                     cv2.FONT_HERSHEY_SIMPLEX,0.5,(180,180,180),1,cv2.LINE_AA)
+        mode_text = "AUTO CORRECT" if self._auto_correct else "MANUAL DRAW"
+        cv2.putText(frame, mode_text, (fw-340,fh-14),
+                    cv2.FONT_HERSHEY_SIMPLEX,0.5,(0,220,255) if self._auto_correct else (180,180,180),1,cv2.LINE_AA)
 
         # Action hold progress bar (shows when holding brush/color/undo)
         if self._action_g and self._action_t:
@@ -479,6 +572,14 @@ class AirDrawing:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0,255,100), 2, cv2.LINE_AA)
         elif time.time() - self._saved_msg_t >= 2.0:
             self._saved_msg = ""
+
+        # Shape detection overlay
+        if self._shape_label and time.time() - self._shape_label_t < 2.0:
+            label = f"DETECTED: {self._shape_label}"
+            (lw, lh), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
+            cv2.rectangle(frame, ((fw-lw)//2 - 12, 50), ((fw+lw)//2 + 12, 50+lh+10), (0,0,0), -1)
+            cv2.putText(frame, label, ((fw-lw)//2, 50+lh),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,220,255), 2, cv2.LINE_AA)
 
     def clear(self):
         if self._canvas is not None: self._canvas[:] = 0

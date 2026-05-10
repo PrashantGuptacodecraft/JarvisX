@@ -12,20 +12,20 @@ from tkinter import ttk, scrolledtext
 from config.settings import JARVIS_NAME, USER_NAME, WAKE_WORD, OPERATOR_MODE
 
 # ── Palette ────────────────────────────────────────────────────
-BG0    = "#040810"   # deepest background
-BG1    = "#080e1a"   # panel bg
-BG2    = "#0c1424"   # card bg
-BG3    = "#101c30"   # input bg
-CYAN   = "#00d4ff"   # primary accent
-BLUE   = "#0055ff"   # secondary
-GREEN  = "#00ff88"   # success / listening
+BG0    = "#000000"   # deepest background
+BG1    = "#0a0a0a"   # panel bg
+BG2    = "#141414"   # card bg
+BG3    = "#1a1a1a"   # input bg
+CYAN   = "#00ffff"   # primary accent
+BLUE   = "#0080ff"   # secondary
+GREEN  = "#00ff80"   # success / listening
 AMBER  = "#ffaa00"   # warning / thinking
-RED    = "#ff2244"   # danger
-PURPLE = "#9933ff"   # special
-TEXT1  = "#ddeeff"   # primary text
-TEXT2  = "#5577aa"   # secondary text
-BORDER = "#0d2040"   # border color
-GLOW   = "#00d4ff18" # glow color
+RED    = "#ff0040"   # danger
+PURPLE = "#aa00ff"   # special
+TEXT1  = "#ffffff"   # primary text
+TEXT2  = "#aaaaaa"   # secondary text
+BORDER = "#333333"   # border color
+GLOW   = "#00ffff40" # glow color
 
 STATUS_COLOR = {
     "sleeping":  "#1a3050",
@@ -787,6 +787,7 @@ class JarvisGUI:
         btn(parent, "◌  SLEEP",     BG2,  TEXT2, self._sleep)
         btn(parent, "📷  CAMERA",   PURPLE, TEXT1, self._open_camera_tab)
         self._gesture_btn = btn(parent, "🖐  GESTURE CTRL", BG2, TEXT2, self._toggle_gesture_control)
+        btn(parent, "🎙 ALWAYS ON", BG2, TEXT2, self._toggle_always_on)
         btn(parent, "✕  CLEAR CHAT", BG2, TEXT2, self._clear_chat)
         btn(parent, "⚙  WORKSPACE", BG2,  TEXT2, self._open_workspace)
 
@@ -1741,6 +1742,40 @@ class JarvisGUI:
         self._chat_text.delete("1.0", "end")
         self._chat_text.configure(state="disabled")
         self._chat_append_system("Conversation cleared.")
+
+    def _toggle_always_on(self):
+        if self.listener:
+            if self.listener.always_listening:
+                self.listener.sleep()
+                self.show_notification("Voice Mode", "Switched to wake word mode.")
+            else:
+                self.listener.enable_always_listening()
+                self.show_notification("Voice Mode", "Always on speaking enabled.")
+
+    def _activate(self):
+        if self.listener:
+            self.listener.wake()
+
+    def _sleep(self):
+        if self.listener:
+            self.listener.sleep()
+
+    def _open_camera_tab(self):
+        self._nb.select(5)  # Assuming CAMERA is the 6th tab (0-indexed)
+
+    def _toggle_gesture_control(self):
+        if hasattr(self, '_gesture_ctrl') and self._gesture_ctrl:
+            new_state = self._gesture_ctrl.toggle()
+            if new_state:
+                self.show_notification("Gesture Control", "Gesture control activated. Show your hand to the camera.")
+            else:
+                self.show_notification("Gesture Control", "Gesture control stopped.")
+        else:
+            self.show_notification("Gesture Control", "Gesture controller not available.")
+
+    def _open_workspace(self):
+        # Placeholder for opening workspace
+        pass
 
     # ── Terminal helpers ──────────────────────────────────────
     def _term_log(self, text: str, tag: str = "out"):

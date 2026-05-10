@@ -209,9 +209,15 @@ class BrowserController:
         if video:
             if not self._open_browser_target(video["url"]):
                 return f"I couldn't open YouTube for '{video['title']}', {USER_NAME}."
+            # Shorten title to first 50 characters or first sentence
+            title = video['title']
+            if len(title) > 50:
+                title = title[:47] + "..."
+            elif '.' in title:
+                title = title.split('.')[0] + '.'
             suffix = f" from {video['channel']}" if video.get("channel") else ""
             return (
-                f"Playing '{video['title']}'{suffix} on YouTube, {USER_NAME}."
+                f"Playing '{title}'{suffix} on YouTube, {USER_NAME}."
             )
 
         search_query = " ".join(part for part in [channel, query] if part).strip()
