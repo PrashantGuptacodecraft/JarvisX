@@ -1,3 +1,10 @@
+pip install resemblyzer      # Voice biometric auth
+pip install ultralytics      # YOLO object detection
+pip install deepface         # Emotion detection  
+pip install paho-mqtt        # IoT smart home
+pip install brainflow        # EEG/BCI hardware
+# Then: ollama pull llama3   # Offline AI fallback
+
 # JARVIS Hand Gesture Control System — Complete Usage Guide
 
 > **How to perform every gesture, voice command, drawing action,

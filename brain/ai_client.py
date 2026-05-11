@@ -437,6 +437,11 @@ Text: "{text}"
     def _offline_reply(self, msg: str) -> str:
         import datetime
 
+        # Try Ollama local LLM first before giving up
+        ollama_reply = self._ollama_chat(msg)
+        if ollama_reply:
+            return ollama_reply
+
         m = msg.lower()
         if "time" in m:
             return f"It's {datetime.datetime.now().strftime('%I:%M %p')}, {USER_NAME}."
@@ -449,3 +454,35 @@ Text: "{text}"
         if self.last_error:
             return f"I can't reach my AI brain right now, {USER_NAME}. {self._offline_reason()}"
         return f"Offline mode, {USER_NAME}. Add a working API key to .env for full capabilities."
+
+    def _ollama_chat(self, msg: str) -> str:
+        """
+        Fallback to local Ollama LLM if running on localhost:11434.
+        Graceful no-op if Ollama is not installed or not running.
+        """
+        try:
+            import requests
+            model = "llama3"   # default model; user can change in .env
+            import os
+            model = os.getenv("OLLAMA_MODEL", model)
+            payload = {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT[:600]},
+                    {"role": "user",   "content": msg},
+                ],
+                "stream": False,
+            }
+            resp = requests.post(
+                "http://localhost:11434/api/chat",
+                json=payload, timeout=8,
+            )
+            if resp.ok:
+                data = resp.json()
+                reply = data.get("message", {}).get("content", "").strip()
+                if reply:
+                    log.info("Ollama local LLM responded.")
+                    return reply
+        except Exception:
+            pass  # Ollama not running — silent fallback
+        return ""

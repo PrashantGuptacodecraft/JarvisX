@@ -234,6 +234,11 @@ class GestureEngine:
             for mod in self._module_mgr._modules:
                 if mod.__class__.__name__ == "AirDrawing":
                     self._air_drawing_ref = mod
+                    # Inject AI client + memory for canvas analysis
+                    if hasattr(self, "_ai_client") and self._ai_client:
+                        mod.set_ai_client(self._ai_client)
+                    if hasattr(self, "_memory") and self._memory:
+                        mod.set_memory(self._memory)
                     break
         self._running = True
         self._thread = threading.Thread(

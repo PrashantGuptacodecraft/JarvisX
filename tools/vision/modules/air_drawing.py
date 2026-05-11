@@ -111,7 +111,18 @@ class AirDrawing:
         self._win_created = False
         self._last_win_check = 0.0
         os.makedirs(_SAVE_DIR, exist_ok=True)
+        # AI integration (injected by gesture controller after init)
+        self._ai_client = None
+        self._memory    = None
         log.info("AirDrawing v3 ready — ☝✌📍 Three fingers 1.5s to activate")
+
+    def set_ai_client(self, ai_client):
+        """Inject AI client for canvas analysis on save."""
+        self._ai_client = ai_client
+
+    def set_memory(self, memory):
+        """Inject memory manager for episode storage."""
+        self._memory = memory
 
     # ── Module API ────────────────────────────────────────────────────────────
     def update(self, frame: np.ndarray, hand_data: dict,
@@ -518,6 +529,8 @@ class AirDrawing:
         log.info("Saved: %s", path)
         self._saved_msg = f"Saved: {os.path.basename(path)}"
         self._saved_msg_t = time.time()
+        # ── AI canvas analysis (background thread) ────────────────────────────
+        self._ai_analyse_drawing(path)
 
     def _draw_countdown(self, frame, hold, total, text, color):
         fw, fh = frame.shape[1], frame.shape[0]
@@ -584,3 +597,32 @@ class AirDrawing:
     def clear(self):
         if self._canvas is not None: self._canvas[:] = 0
         self._strokes.clear(); self._cur = None; self._prev_pt = None
+
+    def _ai_analyse_drawing(self, saved_path: str):
+        """Background: send saved drawing to AI and store description as episode."""
+        import threading
+        def _run():
+            if not self._ai_client:
+                return
+            try:
+                desc = self._ai_client.chat_with_image(
+                    "Describe this air drawing in one sentence. "
+                    "What did the user draw? Be specific about shapes, symbols, or words visible.",
+                    saved_path,
+                )
+                desc = (desc or "").strip()
+                if desc:
+                    log.info("AI drawing analysis: %s", desc)
+                    # Update the save message with AI insight
+                    self._saved_msg = f"Saved ✓  AI: {desc[:60]}"
+                    self._saved_msg_t = time.time()
+                    # Store in episodic memory
+                    if self._memory and hasattr(self._memory, 'add_episode'):
+                        self._memory.add_episode(
+                            description=f"Air drawing saved: {desc}",
+                            source="air_drawing",
+                            tags="drawing,vision,canvas",
+                        )
+            except Exception as e:
+                log.debug("AI drawing analysis failed: %s", e)
+        threading.Thread(target=_run, daemon=True, name="air-drawing-ai").start()

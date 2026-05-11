@@ -183,6 +183,9 @@ class Speaker:
         self.eleven_voice_name = ELEVENLABS_VOICE_NAME.strip()
         self.playback_backend = self._detect_playback_backend()
         self.engine = self._detect_engine()
+        # ── Word-by-word callbacks (for live transcript + avatar lip sync) ──
+        self._word_callbacks: list = []   # list of callable(word: str)
+        self._speaking_callbacks: list = []  # list of callable(speaking: bool)
         self._worker = threading.Thread(target=self._worker_loop, daemon=True)
         self._worker.start()
         log.info(
@@ -340,6 +343,41 @@ class Speaker:
         with self._lock:
             return self._current_text
 
+    def register_word_callback(self, cb) -> None:
+        """Register a callable(word: str) fired for each word as Jarvis speaks."""
+        if cb not in self._word_callbacks:
+            self._word_callbacks.append(cb)
+
+    def register_speaking_callback(self, cb) -> None:
+        """Register a callable(speaking: bool) fired when speech starts/stops."""
+        if cb not in self._speaking_callbacks:
+            self._speaking_callbacks.append(cb)
+
+    def _fire_word_stream(self, text: str) -> None:
+        """Fire word callbacks word-by-word, spaced by ~estimated word timing."""
+        import time as _t
+        words = text.split()
+        if not words or not self._word_callbacks:
+            return
+        # Rough estimate: 130 words/min = ~0.46s per word at -6% rate
+        delay = 0.42
+        for word in words:
+            if self._stop_event.is_set():
+                break
+            for cb in list(self._word_callbacks):
+                try:
+                    cb(word)
+                except Exception:
+                    pass
+            _t.sleep(delay)
+
+    def _fire_speaking_callbacks(self, speaking: bool) -> None:
+        for cb in list(self._speaking_callbacks):
+            try:
+                cb(speaking)
+            except Exception:
+                pass
+
     def acknowledge(self) -> bool:
         try:
             import winsound
@@ -390,6 +428,17 @@ class Speaker:
                 self._current_request_id = request_id
                 self._current_text = text
 
+            self._fire_speaking_callbacks(True)
+            # Word-by-word stream in background for transcript/avatar
+            import threading as _th
+            _clean = _strip_ssml(text)
+            _word_t = _th.Thread(
+                target=self._fire_word_stream,
+                args=(_clean,),
+                daemon=True, name="word-stream"
+            )
+            _word_t.start()
+
             try:
                 self._speak_now(text)
             except Exception as exc:
@@ -413,6 +462,7 @@ class Speaker:
                         self._current_text = ""
                     self._pyttsx3_engine = None
                     self._stop_event.clear()
+                self._fire_speaking_callbacks(False)
                 done.set()
                 if on_complete:
                     try:

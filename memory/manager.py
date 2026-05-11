@@ -167,9 +167,92 @@ class MemoryManager:
                 created TEXT NOT NULL,
                 updated TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS episodes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                description TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT 'user',
+                tags TEXT NOT NULL DEFAULT '',
+                timestamp TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS command_patterns (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                prev_cmd TEXT NOT NULL,
+                next_cmd TEXT NOT NULL,
+                count INTEGER NOT NULL DEFAULT 1,
+                last_seen TEXT NOT NULL,
+                UNIQUE(prev_cmd, next_cmd)
+            );
             """
         )
         self.conn.commit()
+
+    # ── Episodes (episodic memory) ─────────────────────────────────────────────
+
+    def add_episode(self, description: str, source: str = "user", tags: str = "") -> None:
+        """Store a timestamped episode (activity, screen capture, event)."""
+        now = datetime.datetime.now().isoformat()
+        with self._lock:
+            self.conn.execute(
+                "INSERT INTO episodes (description, source, tags, timestamp) VALUES (?, ?, ?, ?)",
+                (description[:600], source, tags, now),
+            )
+            self.conn.commit()
+
+    def get_recent_episodes(self, limit: int = 20, source: str = "") -> list:
+        """Get most recent episodes, optionally filtered by source."""
+        with self._lock:
+            if source:
+                rows = self.conn.execute(
+                    "SELECT description, source, tags, timestamp FROM episodes "
+                    "WHERE source=? ORDER BY id DESC LIMIT ?",
+                    (source, limit),
+                ).fetchall()
+            else:
+                rows = self.conn.execute(
+                    "SELECT description, source, tags, timestamp FROM episodes "
+                    "ORDER BY id DESC LIMIT ?", (limit,)
+                ).fetchall()
+        return [{"description": r[0], "source": r[1], "tags": r[2], "timestamp": r[3]} for r in rows]
+
+    def search_episodes(self, query: str, source: str = "", limit: int = 10) -> list:
+        """Search episodes by keyword."""
+        all_eps = self.get_recent_episodes(limit=200, source=source)
+        q_lower = (query or "").lower()
+        words = [w for w in q_lower.split() if len(w) > 2]
+        scored = []
+        for ep in all_eps:
+            text = (ep["description"] + " " + ep["tags"]).lower()
+            score = sum(1 for w in words if w in text)
+            if score > 0:
+                scored.append((score, ep))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [ep for _, ep in scored[:limit]]
+
+    # ── Command patterns (predictive engine) ──────────────────────────────────
+
+    def save_command_pattern(self, prev_cmd: str, next_cmd: str) -> None:
+        """Upsert a command co-occurrence record."""
+        now = datetime.datetime.now().isoformat()
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT INTO command_patterns (prev_cmd, next_cmd, count, last_seen)
+                VALUES (?, ?, 1, ?)
+                ON CONFLICT(prev_cmd, next_cmd) DO UPDATE SET
+                    count = count + 1,
+                    last_seen = excluded.last_seen
+                """,
+                (prev_cmd[:80], next_cmd[:80], now),
+            )
+            self.conn.commit()
+
+    def get_command_patterns(self) -> list:
+        """Return all stored command co-occurrence records."""
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT prev_cmd, next_cmd, count FROM command_patterns ORDER BY count DESC"
+            ).fetchall()
+        return [{"prev_cmd": r[0], "next_cmd": r[1], "count": r[2]} for r in rows]
 
     @staticmethod
     def _normalize_phone(phone: str) -> str:

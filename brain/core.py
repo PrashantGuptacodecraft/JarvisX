@@ -106,6 +106,22 @@ INTENTS = {
     "copy_to_clipboard": ["copy to clipboard", "copy this"],
     "tell_joke": ["tell me a joke", "some jokes", "make me laugh"],
     "comfort_support": ["not feeling good", "feeling low", "i am sad", "i'm sad"],
+    # ── Ultra-Advanced Features ───────────────────────────────────────────────
+    "private_mode_on":  ["private mode on", "enable private mode", "go private", "start private mode"],
+    "private_mode_off": ["private mode off", "disable private mode", "exit private", "stop private mode"],
+    "iot_control":      ["turn on the", "turn off the", "dim the", "set thermostat", "lock door", "unlock door", "smart home"],
+    "record_workflow":  ["start recording", "record workflow", "record macro", "record steps"],
+    "stop_recording":   ["stop recording", "finish recording", "end recording"],
+    "replay_workflow":  ["replay workflow", "replay macro", "play back workflow", "run macro"],
+    "screen_memory":    ["find that", "what was i looking at", "search screen memory", "recall screen"],
+    "screen_action":    ["click the", "automate screen", "do on screen", "control screen"],
+    "code_review":      ["review code", "check my code", "review this file", "analyze code", "review my code"],
+    "what_do_you_see":  ["what do you see", "what objects", "detect objects", "scan the room", "describe scene"],
+    "predict_next":     ["what will i probably ask", "predict next command", "what do i usually do next"],
+    "enroll_voice":     ["enroll my voice", "register my voice", "setup voice auth", "voice profile"],
+    "show_hud":         ["show hud", "open hud", "display hud", "show overlay"],
+    "hide_hud":         ["hide hud", "close hud", "remove overlay", "dismiss hud"],
+    "multi_agent":      ["research and write", "gather and create", "find and draft", "multi agent"],
 }
 
 PLAN_ONLY_INTENTS = {
@@ -153,6 +169,10 @@ class Brain:
         self._pending_whatsapp_contact = ""
         self._pending_whatsapp_message = ""
         self._last_cam_image = ""   # Path to last camera frame for vision queries
+        # ── Advanced modules (attached by main.py after init) ─────────────────
+        self.predictor   = None   # PredictiveEngine
+        self.orchestrator = None  # AgentOrchestrator
+        self.emotion_state: str = "neutral"   # Updated by EmotionDetector
 
     def set_terminal_log(self, callback):
         """Allow GUI terminal tab to receive command outputs."""
@@ -177,6 +197,13 @@ class Brain:
         """Main entry: detect intent and route to correct handler."""
         text = text.strip()
         text_lower = text.lower()
+
+        # ── Record command to predictive engine ────────────────────────────────
+        if self.predictor and text:
+            try:
+                self.predictor.record(text)
+            except Exception:
+                pass
 
 
         # ── Camera vision: intercept queries about what camera sees ──────
@@ -1620,6 +1647,40 @@ class Brain:
                 except Exception:
                     return "Couldn't access clipboard."
 
+            # ── Ultra-Advanced Feature Dispatch ──────────────────────────────
+            if intent == "private_mode_on":
+                return self._handle_private_mode_on(original)
+            if intent == "private_mode_off":
+                return self._handle_private_mode_off(original)
+            if intent == "iot_control":
+                return self._handle_iot_control(original)
+            if intent == "record_workflow":
+                return self._handle_record_workflow(original)
+            if intent == "stop_recording":
+                return self._handle_stop_recording(original)
+            if intent == "replay_workflow":
+                return self._handle_replay_workflow(original)
+            if intent == "screen_memory":
+                return self._handle_screen_memory(original)
+            if intent == "screen_action":
+                return self._handle_screen_action(original)
+            if intent == "code_review":
+                return self._handle_code_review(original)
+            if intent == "what_do_you_see":
+                return self._handle_what_do_you_see(original)
+            if intent == "predict_next":
+                return self._handle_predict_next(original)
+            if intent == "enroll_voice":
+                return self._handle_enroll_voice(original)
+            if intent == "show_hud":
+                return self._handle_show_hud(original)
+            if intent == "hide_hud":
+                return self._handle_hide_hud(original)
+            if intent == "multi_agent":
+                if self.orchestrator:
+                    return self.orchestrator.run(original)
+                return self._fallback_to_ai(original, voice_mode=voice_mode)
+
         except Exception as e:
             log.error(f"Execution error [intent={intent}]: {e}")
             return f"Error executing '{intent}', {USER_NAME}: {e}"
@@ -1702,3 +1763,114 @@ class Brain:
         if any(w in low for w in ["yes", "yeah", "yep", "do it", "confirm", "sure", "go ahead", "ok"]):
             return self.execute_intent(intent, params, params.get("raw", ""))
         return f"Cancelled, {USER_NAME}."
+
+    # ── Ultra-Advanced Intent Handlers ────────────────────────────────────────
+
+    def _handle_private_mode_on(self, text: str) -> str:
+        pm = self.tools.get("private_mode")
+        if pm:
+            return pm.enable()
+        return "Private mode module not loaded."
+
+    def _handle_private_mode_off(self, text: str) -> str:
+        pm = self.tools.get("private_mode")
+        if pm:
+            return pm.disable()
+        return "Private mode module not loaded."
+
+    def _handle_iot_control(self, text: str) -> str:
+        iot = self.tools.get("iot")
+        if iot:
+            result = iot.handle_command(text)
+            if result:
+                return result
+        return self.ai.chat(text)
+
+    def _handle_record_workflow(self, text: str) -> str:
+        wr = self.tools.get("workflow_recorder")
+        if wr:
+            return wr.start_recording()
+        return "Workflow recorder not available."
+
+    def _handle_stop_recording(self, text: str) -> str:
+        wr = self.tools.get("workflow_recorder")
+        if wr and wr.is_recording():
+            import re
+            m = re.search(r"(?:save as|called?|name)\s+['\"]?(.+?)['\"]?$", text, re.IGNORECASE)
+            name = m.group(1).strip() if m else "my workflow"
+            return wr.stop_recording(name)
+        return "Not currently recording."
+
+    def _handle_replay_workflow(self, text: str) -> str:
+        wr = self.tools.get("workflow_recorder")
+        if wr:
+            import re
+            m = re.search(r"(?:replay|play back|run macro)\s+['\"]?(.+?)['\"]?$", text, re.IGNORECASE)
+            name = m.group(1).strip() if m else ""
+            if name:
+                return wr.replay(name)
+            workflows = wr.list_workflows()
+            if workflows:
+                return f"Available workflows: {', '.join(workflows[:5])}. Which one?"
+            return "No saved workflows yet."
+        return "Workflow recorder not available."
+
+    def _handle_screen_memory(self, text: str) -> str:
+        sm = self.tools.get("screen_memory")
+        if sm:
+            return sm.search(text)
+        return "Screen memory not available."
+
+    def _handle_screen_action(self, text: str) -> str:
+        sa = self.tools.get("screen_agent")
+        if sa:
+            return sa.execute(text)
+        return "Screen agent not available (install pyautogui + Pillow)."
+
+    def _handle_code_review(self, text: str) -> str:
+        ca = self.tools.get("code_analyzer")
+        if ca:
+            import re
+            m = re.search(r"(?:review|analyze|check)\s+(?:file\s+)?['\"]?(.+\.(?:py|js|ts|java|go))['\"]?", text, re.IGNORECASE)
+            if m:
+                return ca.review_file(m.group(1).strip())
+            return ca.review_snippet(text, language="Python")
+        return "Code analyzer not available."
+
+    def _handle_what_do_you_see(self, text: str) -> str:
+        od = self.tools.get("object_detector")
+        if od and od.available:
+            return od.describe_scene()
+        # Fallback: use camera
+        if self._last_cam_image:
+            return self.ai.chat_with_image(text, self._last_cam_image)
+        return "No camera frame available. Open the camera tab first."
+
+    def _handle_predict_next(self, text: str) -> str:
+        if self.predictor:
+            preds = self.predictor.top_predictions(5)
+            if preds:
+                return f"Based on your patterns, you'll likely ask: {', '.join(preds[:3])}."
+            return f"I'm still learning your patterns, {USER_NAME}. Give me more commands to build a model."
+        return "Predictive engine not loaded."
+
+    def _handle_enroll_voice(self, text: str) -> str:
+        va = self.tools.get("voice_auth")
+        if va:
+            return va.enroll()
+        return "Voice authenticator not available (install resemblyzer)."
+
+    def _handle_show_hud(self, text: str) -> str:
+        hud = self.tools.get("hud")
+        if hud:
+            hud.show()
+            return "HUD overlay activated."
+        return "HUD not loaded. Run Jarvis in GUI mode."
+
+    def _handle_hide_hud(self, text: str) -> str:
+        hud = self.tools.get("hud")
+        if hud:
+            hud.hide()
+            return "HUD overlay hidden."
+        return "HUD not loaded."
+

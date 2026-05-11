@@ -1,0 +1,49 @@
+# requirements_advanced.txt — JarvisX Ultra-Advanced Dependencies
+# Install with:  pip install -r requirements_advanced.txt
+#
+# Note: Heavy optional deps (YOLO, deepface, Coqui, BrainFlow, Ollama)
+# are marked with [OPTIONAL] — skip if you don't need that feature.
+
+# ── Phase 1: AI Intelligence ──────────────────────────────────────────────────
+# Already installed: openai, groq, google-generativeai, requests
+
+# ── Phase 2: Vision ───────────────────────────────────────────────────────────
+ultralytics>=8.0.0          # YOLO object detection [OPTIONAL — 200MB]
+deepface>=0.0.93            # Emotion detection [OPTIONAL — requires TF]
+fer>=22.5.1                 # Emotion detection (lighter alt to deepface) [OPTIONAL]
+# mediapipe already installed for gesture engine
+
+# ── Phase 3: Voice ────────────────────────────────────────────────────────────
+resemblyzer>=0.1.3          # Voice biometric auth embeddings [OPTIONAL]
+pydub>=0.25.1               # Spatial audio processing
+sounddevice>=0.4.6          # Audio capture (likely already installed)
+
+# ── Phase 4: System ───────────────────────────────────────────────────────────
+pyautogui>=0.9.54           # GUI automation (screen agent)
+Pillow>=9.0.0               # Screenshot capture
+pynput>=1.7.6               # Keyboard/mouse recording
+watchdog>=3.0.0             # File system watcher (code intelligence)
+fastapi>=0.100.0            # Cross-device REST API
+uvicorn>=0.23.0             # ASGI server for FastAPI
+cryptography>=41.0.0        # AES-256 private mode encryption
+pyperclip>=1.8.2            # Clipboard sync
+pycaw>=20230407             # Windows audio volume control [WINDOWS ONLY]
+
+# ── Phase 5: UI ───────────────────────────────────────────────────────────────
+psutil>=5.9.0               # System metrics (CPU, RAM, network)
+# tkinter — built into Python stdlib, no install needed
+numpy>=1.24.0               # Audio FFT for visualizer
+
+# ── Phase 6: Experimental ────────────────────────────────────────────────────
+brainflow>=5.12.0           # BCI/EEG hardware interface [OPTIONAL — needs EEG device]
+paho-mqtt>=1.6.1            # IoT MQTT smart home [OPTIONAL]
+# requests already installed (for Home Assistant IoT + Ollama)
+# Ollama: install from https://ollama.ai and run: ollama pull llama3
+
+# ── Quick install (core advanced features, no heavy optional deps) ─────────────
+# pip install pyautogui Pillow pynput watchdog fastapi uvicorn cryptography
+#             pyperclip pycaw psutil numpy pydub sounddevice paho-mqtt
+
+# ── Full install including optional AI vision features ────────────────────────
+# pip install -r requirements_advanced.txt
+# Note: deepface/ultralytics require ~2-5GB model downloads on first use
