@@ -19,6 +19,8 @@ import threading
 import time
 import math
 import logging
+import os
+import urllib.request
 from typing import Optional, Tuple
 import numpy as np
 
@@ -69,16 +71,31 @@ class GazeTracker:
 
     def _init_backend(self):
         try:
+            model_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), "models", "face_landmarker.task")
+            if not os.path.exists(model_path):
+                log.info("Downloading face_landmarker.task...")
+                os.makedirs(os.path.dirname(model_path), exist_ok=True)
+                urllib.request.urlretrieve("https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task", model_path)
+                
             import mediapipe as mp
-            self._mp_face_mesh = mp.solutions.face_mesh
-            self._face_mesh = self._mp_face_mesh.FaceMesh(
-                max_num_faces=1,
-                refine_landmarks=True,   # enables iris landmarks
-                min_detection_confidence=0.5,
+            BaseOptions = mp.tasks.BaseOptions
+            FaceLandmarker = mp.tasks.vision.FaceLandmarker
+            FaceLandmarkerOptions = mp.tasks.vision.FaceLandmarkerOptions
+            VisionRunningMode = mp.tasks.vision.RunningMode
+            
+            options = FaceLandmarkerOptions(
+                base_options=BaseOptions(model_asset_path=model_path),
+                running_mode=VisionRunningMode.IMAGE,
+                num_faces=1,
+                min_face_detection_confidence=0.5,
+                min_face_presence_confidence=0.5,
                 min_tracking_confidence=0.5,
+                output_face_blendshapes=False,
+                output_facial_transformation_matrixes=False
             )
+            self._face_mesh = FaceLandmarker.create_from_options(options)
             self.available = True
-            log.info("GazeTracker: MediaPipe Face Mesh ready (iris tracking enabled).")
+            log.info("GazeTracker: MediaPipe FaceLandmarker ready (iris tracking enabled).")
         except ImportError:
             log.warning("GazeTracker: mediapipe not installed. Run: pip install mediapipe")
         except Exception as e:
@@ -149,13 +166,16 @@ class GazeTracker:
 
     def _process(self, frame: np.ndarray):
         import cv2
+        import mediapipe as mp
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        result = self._face_mesh.process(rgb)
-        if not result.multi_face_landmarks:
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        result = self._face_mesh.detect(mp_image)
+        
+        if not result.face_landmarks:
             self.gaze_confidence = 0.0
             return
 
-        lm = result.multi_face_landmarks[0].landmark
+        lm = result.face_landmarks[0]
         h, w = frame.shape[:2]
 
         # Average iris center (left + right)

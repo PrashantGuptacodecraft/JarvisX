@@ -50,14 +50,14 @@ def _strip_ssml(text: str) -> str:
 VOICE_PROFILES = {
     # Primary: warm, expressive Indian-English — best SSML support
     "human_girl": {
-        "edge_voice":            "en-IN-NeerjaExpressiveNeural",
-        "rate":                  "-6%",
+        "edge_voice":            "en-US-JaneNeural",
+        "rate":                  "-4%",
         "pitch":                 "+0Hz",
         "volume":                "+0%",
         "ssml_style":            "chat",       # mstts:express-as style
         "ssml_style_degree":     "1.2",
         "pyttsx3_rate":          158,
-        "pyttsx3_voice_keywords": ["neerja", "zira", "female", "hazel", "aria"],
+        "pyttsx3_voice_keywords": ["jane", "zira", "female", "hazel", "aria"],
     },
     # Confident US female — great for assistant persona
     "aria": {

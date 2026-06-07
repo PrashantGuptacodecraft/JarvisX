@@ -39,8 +39,7 @@ KNOWLEDGE_DIR: Path = Path(os.getenv(
     str(Path(__file__).resolve().parent.parent / "data" / "knowledge")
 ))
 
-# ── AI Provider & Models ──────────────────────────────────────────────────────
-AI_PROVIDER:  str = os.getenv("AI_PROVIDER",  "groq")
+AI_PROVIDER:  str = os.getenv("AI_PROVIDER",  "gemini")
 
 GEMINI_KEY:   str = os.getenv("GEMINI_API_KEY",  "")
 OPENAI_KEY:   str = os.getenv("OPENAI_API_KEY",  "")

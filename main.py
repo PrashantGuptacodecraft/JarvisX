@@ -262,49 +262,29 @@ def _start_ui_modules(tools: dict, core):
 
     # HUD Overlay
     try:
-        from ui.hud_overlay import HUDOverlay
-        if os.getenv("JARVIS_HUD", "true").lower() == "true":
-            def _s(): return getattr(core, "_last_status", "sleeping")
-            def _e():
-                em = tools.get("emotion_detector")
-                return (em.current_emotion, em.stress_level) if em else ("neutral", 0.0)
-            def _p():
-                b = core.brain
-                return b.predictor.top_predictions(3) if hasattr(b, "predictor") and b.predictor else []
-            hud = HUDOverlay(status_provider=_s, emotion_provider=_e, prediction_provider=_p)
-            threading.Thread(target=hud.show, daemon=True).start()
-            tools["hud"] = hud
-            log.info("HUDOverlay started.")
+        log.info("HUDOverlay disabled.")
     except Exception as e:
         log.warning(f"HUDOverlay: {e}")
 
     # Live Transcript
     try:
-        from ui.live_transcript import LiveTranscript
-        t = LiveTranscript()
-        t.start()
-        tools["transcript"] = t
-        log.info("LiveTranscript started.")
+        # from ui.live_transcript import LiveTranscript
+        # t = LiveTranscript()
+        # t.start()
+        # tools["transcript"] = t
+        log.info("LiveTranscript disabled.")
     except Exception as e:
         log.warning(f"LiveTranscript: {e}")
 
     # Audio Visualizer
     try:
-        from ui.audio_visualizer import AudioVisualizer
-        v = AudioVisualizer()
-        v.start()
-        tools["visualizer"] = v
-        log.info("AudioVisualizer started.")
+        log.info("AudioVisualizer disabled.")
     except Exception as e:
         log.warning(f"AudioVisualizer: {e}")
 
     # Avatar Face
     try:
-        from ui.avatar import AvatarFace
-        a = AvatarFace()
-        a.start()
-        tools["avatar"] = a
-        log.info("AvatarFace started.")
+        log.info("AvatarFace disabled.")
     except Exception as e:
         log.warning(f"AvatarFace: {e}")
 

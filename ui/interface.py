@@ -1710,10 +1710,10 @@ class JarvisGUI:
 
     # ── Chat helpers ─────────────────────────────────────────
     def add_user_message(self, text: str):
-        self.root.after(0, self._append_user, text)
+        pass  # Disabled - no chat display
 
     def add_jarvis_message(self, text: str):
-        self.root.after(0, self._append_jarvis, text)
+        pass  # Disabled - no chat display
 
     def _append_user(self, text: str):
         now = datetime.datetime.now().strftime("%H:%M")
@@ -1826,22 +1826,7 @@ class JarvisGUI:
 
     # ── Notification popup ────────────────────────────────────
     def show_notification(self, title: str, message: str):
-        def _show():
-            pop = tk.Toplevel(self.root)
-            pop.title(title)
-            pop.configure(bg=BG2)
-            pop.geometry("340x130")
-            pop.attributes("-topmost", True)
-            pop.resizable(False, False)
-            tk.Label(pop, text=f"  {title}", font=self._fonts["mono_popup"],
-                     fg=AMBER, bg=BG2, anchor="w").pack(fill="x", pady=(16, 4), padx=16)
-            tk.Label(pop, text=message, font=self._fonts["body"],
-                     fg=TEXT1, bg=BG2, wraplength=300, justify="left").pack(pady=4, padx=16)
-            tk.Button(pop, text="  DISMISS  ", bg=BLUE, fg=TEXT1,
-                      font=self._fonts["button"], relief="flat", cursor="hand2",
-                      command=pop.destroy).pack(pady=8)
-            pop.after(8000, pop.destroy)
-        self.root.after(0, _show)
+        pass  # Disabled - no notifications
 
     # ── Clock ────────────────────────────────────────────────
     def _start_clock(self):
