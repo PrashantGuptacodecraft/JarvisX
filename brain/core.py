@@ -59,6 +59,9 @@ INTENTS = {
     "volume_up":      ["volume up", "louder", "increase volume", "turn up"],
     "volume_down":    ["volume down", "quieter", "decrease volume", "turn down"],
     "mute":           ["mute", "silence audio"],
+    "media_playpause": ["pause music", "stop music", "resume music", "play music", "pause media"],
+    "media_next":     ["next track", "next song", "skip song"],
+    "media_prev":     ["previous track", "previous song", "go back a song"],
     "screenshot":     ["screenshot", "capture screen", "take a screenshot"],
     "battery":        ["battery", "power level", "how much charge"],
     "wifi":           ["wifi status", "internet status", "network status"],
@@ -172,6 +175,8 @@ class Brain:
         # ── Advanced modules (attached by main.py after init) ─────────────────
         self.predictor   = None   # PredictiveEngine
         self.orchestrator = None  # AgentOrchestrator
+        self.universal_agent = None # UniversalAgent (Gemini Tool Calling)
+        self.swarm_manager = None # SwarmManager
         self.emotion_state: str = "neutral"   # Updated by EmotionDetector
 
     def set_terminal_log(self, callback):
@@ -278,6 +283,17 @@ class Brain:
             return self._execute("comfort_support", {"raw": text}, text, voice_mode=voice_mode)
 
         # Check for complex multi-step task
+        if self.universal_agent and not self._planner_active and self._looks_like_ultra_advanced(text_lower):
+            log.info("Ultra advanced task detected — using Universal Agent")
+            self._terminal_log(f"[UNIVERSAL AGENT] Analyzing: {text}")
+            
+            # Inject context
+            if hasattr(self, "volatile_memory") and "active_window" in self.volatile_memory:
+                active_win = self.volatile_memory["active_window"]
+                text = f"[Context: User is currently looking at window: '{active_win}']\nUser Request: {text}"
+                
+            return self.universal_agent.run(text)
+
         if self.planner and not self._planner_active and self.planner.is_complex_task(text):
             log.info("Complex task detected — using autonomous planner")
             return self.planner.plan_and_execute(text, gui_log=self._terminal_log)
@@ -352,6 +368,14 @@ class Brain:
                 if kw in low:
                     return intent, self._extract_params(intent, low, original)
         return None, {}
+
+    def _looks_like_ultra_advanced(self, low: str) -> bool:
+        advanced_keywords = [
+            "ultra advance", "navigate the browser", "use the mouse", 
+            "type on my screen", "extract text from", "control computer",
+            "scrape website", "autonomous browser"
+        ]
+        return any(kw in low for kw in advanced_keywords)
 
     def _looks_like_whatsapp_message(self, low: str) -> bool:
         has_contact_signal = " to " in low or " saying " in low or " that " in low or " tell " in low
@@ -1658,6 +1682,23 @@ class Brain:
                 return self._handle_record_workflow(original)
             if intent == "stop_recording":
                 return self._handle_stop_recording(original)
+
+            # ── Media Controls ────────────────────────────────────────────────────────
+            if intent in ["media_playpause", "media_next", "media_prev"]:
+                try:
+                    import pyautogui
+                    if intent == "media_playpause":
+                        pyautogui.press("playpause")
+                        return "Toggled play/pause."
+                    elif intent == "media_next":
+                        pyautogui.press("nexttrack")
+                        return "Skipped to next track."
+                    elif intent == "media_prev":
+                        pyautogui.press("prevtrack")
+                        return "Went to previous track."
+                except Exception as e:
+                    return f"Failed to control media: {e}"
+
             if intent == "replay_workflow":
                 return self._handle_replay_workflow(original)
             if intent == "screen_memory":
@@ -1677,7 +1718,9 @@ class Brain:
             if intent == "hide_hud":
                 return self._handle_hide_hud(original)
             if intent == "multi_agent":
-                if self.orchestrator:
+                if hasattr(self, "swarm_manager") and self.swarm_manager:
+                    return self.swarm_manager.run_swarm(original)
+                elif self.orchestrator:
                     return self.orchestrator.run(original)
                 return self._fallback_to_ai(original, voice_mode=voice_mode)
 
@@ -1742,6 +1785,10 @@ class Brain:
                 "- Keep confirmations ultra-brief.\n"
                 "- Only give longer detail when the request truly needs it."
             )
+
+        if hasattr(self, "volatile_memory") and "active_window" in self.volatile_memory:
+            active_win = self.volatile_memory["active_window"]
+            context_parts.append(f"Current Screen Context:\nThe user is currently looking at the window: '{active_win}'. Keep this in mind if they ask 'what am I looking at?' or 'read this'.")
 
         context = "\n\n".join(context_parts)
         return self.ai.chat(text, context=context, voice_mode=voice_mode)

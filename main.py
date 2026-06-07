@@ -101,6 +101,31 @@ def build_jarvis(gui=None, command_queue=None):
     except Exception as e:
         log.warning(f"AgentOrchestrator: {e}")
 
+    # Universal Agent (Gemini native tools)
+    try:
+        from brain.agents.universal_agent import UniversalAgent
+        brain.universal_agent = UniversalAgent(ai, brain)
+        log.info("UniversalAgent ready.")
+    except Exception as e:
+        log.warning(f"UniversalAgent: {e}")
+
+    # Multi-Agent Swarm
+    try:
+        from brain.agents.swarm import SwarmManager
+        brain.swarm_manager = SwarmManager(ai, brain)
+        log.info("SwarmManager ready.")
+    except Exception as e:
+        log.warning(f"SwarmManager: {e}")
+
+    # Proactive Context Watcher
+    try:
+        from tools.system.context_watcher import ContextWatcher
+        cw = ContextWatcher(brain)
+        cw.start()
+        log.info("ContextWatcher started.")
+    except Exception as e:
+        log.warning(f"ContextWatcher: {e}")
+
     # Voice Biometric Auth
     try:
         from voice.authenticator import VoiceAuthenticator

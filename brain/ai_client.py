@@ -224,6 +224,7 @@ class AIClient:
             "openai": OPENAI_MODEL,
             "groq": GROQ_MODEL,
             "xai": XAI_MODEL,
+            "ollama": "llama3", # Default local model
         }.get(provider, "")
 
     def chat(self, user_message: str, context: str = "", voice_mode: bool = False) -> str:
@@ -291,6 +292,28 @@ class AIClient:
                     reply = resp.choices[0].message.content or ""
                     self.history.append({"role": "assistant", "content": reply})
                     return reply.strip()
+                    
+                if current_provider == "ollama":
+                    import requests
+                    self.history.append({"role": "user", "content": full_msg})
+                    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + [
+                        {"role": h["role"], "content": h["content"]}
+                        for h in self.history[-history_limit:]
+                        if "content" in h
+                    ]
+                    try:
+                        res = requests.post("http://localhost:11434/api/chat", json={
+                            "model": self._provider_model_name("ollama"),
+                            "messages": messages,
+                            "stream": False
+                        }, timeout=30)
+                        res.raise_for_status()
+                        reply = res.json().get("message", {}).get("content", "")
+                        self.history.append({"role": "assistant", "content": reply})
+                        return reply.strip()
+                    except Exception as e:
+                        log.warning(f"Ollama request failed: {e}")
+                        raise e
 
                 return self._offline_reply(user_message)
 
