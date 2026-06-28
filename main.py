@@ -12,6 +12,8 @@ from pathlib import Path
 from config.settings import JARVIS_NAME, KNOWLEDGE_DIR, OPERATOR_MODE, USER_NAME, VOICE_ALWAYS_ON, WAKE_WORD
 from config.logger import get_logger
 
+from shared_core import get_bus
+
 from brain.ai_client import AIClient
 from brain.core import Brain
 from brain.planner import AutonomousPlanner
@@ -49,6 +51,34 @@ def build_jarvis(gui=None, command_queue=None):
     if command_queue is None:
         command_queue = queue.Queue()
 
+    # ── Shared Core Event Bus (Phase A) ───────────────────────────────────────
+    # The machine's central nervous system. Subsystems publish onto it; the logger
+    # below is the first live subscriber (proves end-to-end). Additive + crash-proof.
+    bus = get_bus()
+
+    def _bus_logger(event):
+        log.debug(f"[bus] {event.topic} <- {event.source} :: {event.payload}")
+
+    try:
+        bus.subscribe("*", _bus_logger, source="event_logger")
+        log.info("Event Bus online; event_logger subscribed.")
+    except Exception as e:
+        log.warning(f"Event Bus logger not wired: {e}")
+
+    # ── State Manager + World-State History Ledger (Phase B) ───────────────────
+    # Live machine snapshot + chronological transition ledger (rolling persistence).
+    # Additive + crash-proof: failure here never blocks boot.
+    state_manager = None
+    try:
+        from shared_core.state_manager import build_state_manager, OSSampler
+        state_manager = build_state_manager(bus, persist=True)
+        state_manager.start()
+        os_sampler = OSSampler(bus, interval=2.0)
+        os_sampler.start()
+        log.info(f"StateManager + History Ledger online (ledger size={state_manager.ledger.size()}).")
+    except Exception as e:
+        log.warning(f"StateManager not started: {e}")
+
     speaker = Speaker()
     memory = MemoryManager()
     ai = AIClient()
@@ -81,6 +111,45 @@ def build_jarvis(gui=None, command_queue=None):
     brain = Brain(ai, tools)
     planner = AutonomousPlanner(ai, brain)
     brain.planner = planner
+    brain.state_manager = state_manager   # Phase B: live WorldState + History Ledger (may be None)
+
+    # ── Continuity (Phase B B10/B11): restart = pause/resume, not fresh boot ────
+    # Crash-safe: atomic writes + autosave + atexit save. Additive; failure never blocks boot.
+    try:
+        from shared_core.state_manager import ContinuityManager
+        continuity = ContinuityManager()
+        if state_manager is not None:
+            continuity.register_provider(
+                "world_state", state_manager.snapshot, state_manager.restore_snapshot)
+
+        def _get_brain_state():
+            st = {}
+            vm = getattr(brain, "volatile_memory", None)
+            if isinstance(vm, dict):
+                st["volatile_memory"] = vm
+            pend = getattr(brain, "pending", None)
+            if pend is not None:
+                st["pending"] = pend     # reasoning state; persisted only if serializable
+            return st
+
+        def _set_brain_state(data):
+            if not isinstance(data, dict):
+                return
+            if isinstance(data.get("volatile_memory"), dict):
+                brain.volatile_memory = data["volatile_memory"]
+            if "pending" in data and data["pending"] is not None:
+                p = data["pending"]
+                brain.pending = tuple(p) if isinstance(p, list) else p
+
+        continuity.register_provider("brain", _get_brain_state, _set_brain_state)
+        restored = continuity.restore()          # B11: resume prior runtime state
+        continuity.start_autosave()
+        import atexit
+        atexit.register(continuity.stop)
+        brain.continuity = continuity
+        log.info(f"ContinuityManager online (restored {restored} slice(s)).")
+    except Exception as e:
+        log.warning(f"ContinuityManager not started: {e}")
 
     # ── Advanced Modules ──────────────────────────────────────────────────────
 

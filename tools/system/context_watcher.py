@@ -7,6 +7,7 @@ import threading
 import time
 import ctypes
 from config.logger import get_logger
+from shared_core import publish_safe
 
 log = get_logger("system.context")
 
@@ -33,10 +34,13 @@ class ContextWatcher:
             title = self._get_active_window_title()
             if title and title != self.current_window:
                 self.current_window = title
-                # Inject into brain memory
+                # Inject into brain memory (legacy path — unchanged)
                 if not hasattr(self.brain, "volatile_memory"):
                     self.brain.volatile_memory = {}
                 self.brain.volatile_memory["active_window"] = title
+                # Event Bus (Phase A): publish the perception. Additive + crash-proof.
+                publish_safe("perception.os.active_window",
+                             {"title": title}, source="context_watcher")
             time.sleep(2.0)  # Check every 2 seconds
 
     def start(self):

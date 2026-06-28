@@ -33,6 +33,7 @@ ENTER_HOLD   = 1.5   # Three fingers hold time to activate drawing
 EXIT_HOLD    = 0.8   # Fist hold time to save & exit
 TOGGLE_HOLD  = 0.6   # Thumb-down hold time to toggle auto-correct
 ACTION_HOLD  = 0.35  # Brush/color change hold time
+UNDO_CD      = 0.5   # Undo cooldown
 
 _SAVE_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(

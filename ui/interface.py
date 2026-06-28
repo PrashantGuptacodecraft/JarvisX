@@ -484,7 +484,7 @@ class JarvisGUI:
         self._font_scale = 1.0
 
         self.root = tk.Tk()
-        self.root.title(f"J.A.R.V.I.S — Advanced AI System")
+        self.root.title("J.A.R.V.I.S — Advanced AI System")
         self.root.geometry(f"{BASE_WIDTH}x{BASE_HEIGHT}")
         self.root.minsize(MIN_WIDTH, MIN_HEIGHT)
         self.root.configure(bg=BG0)
@@ -1854,26 +1854,9 @@ class JarvisGUI:
         _update()
 
     # ── Controls ─────────────────────────────────────────────
-    def _activate(self):
-        if self.listener:
-            self.listener.wake(with_callback=True)
-        else:
-            self.command_queue.put("__WAKE__")
-        self.set_status("listening")
-
-    def _sleep(self):
-        if self.listener:
-            self.listener.sleep()
-        self.command_queue.put("__SLEEP__")
-        self.set_status("sleeping")
-
     def _quick_cmd(self, cmd: str):
         self._append_user(cmd)
         self.command_queue.put(cmd)
-
-    def _open_workspace(self):
-        self.command_queue.put("run command explorer JarvisWorkspace" if __import__("sys").platform=="win32"
-                               else "run command xdg-open JarvisWorkspace")
 
     def _on_submit(self, event=None):
         text = self._input_var.get().strip()

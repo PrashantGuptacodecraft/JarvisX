@@ -7,6 +7,7 @@ import threading
 
 from config.logger import get_logger
 from config.settings import JARVIS_NAME, USER_NAME
+from shared_core import publish_safe
 
 log = get_logger("core_loop")
 
@@ -152,6 +153,10 @@ class CoreLoop:
                 self.gui.add_user_message(command)
 
         log.info(f"Processing: {command}")
+        # Event Bus (Phase A): publish the intent. Additive + crash-proof (publish_safe).
+        publish_safe("cognition.intent",
+                     {"text": command, "voice": voice_source},
+                     source="core_loop", correlation_id=str(turn_token))
         try:
             response = self.brain.process(command, voice_mode=voice_source)
         except Exception as exc:
@@ -160,6 +165,11 @@ class CoreLoop:
 
         if not response:
             response = f"Done, {USER_NAME}."
+
+        # Event Bus (Phase A): publish the action result.
+        publish_safe("action.result",
+                     {"text": response, "voice": voice_source},
+                     source="core_loop", correlation_id=str(turn_token))
 
         if self.memory:
             self.memory.add_history(command, response)

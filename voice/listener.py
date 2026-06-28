@@ -8,6 +8,7 @@ import threading
 import time
 from difflib import SequenceMatcher
 
+from shared_core import publish_safe
 from config.logger import get_logger
 from config.settings import (
     USER_NAME,
@@ -584,6 +585,9 @@ class Listener:
             self.keep_active()
             self._status("listening")
             return
+        # Event Bus (Phase A): publish the perceived input. Additive + crash-proof.
+        publish_safe("perception.voice.heard",
+                     {"text": cleaned, "typed": typed_from_gui}, source="listener")
         _put(cleaned)
         self._status("thinking")
 
