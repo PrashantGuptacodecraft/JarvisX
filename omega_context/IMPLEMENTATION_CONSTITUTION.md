@@ -33,4 +33,16 @@ When a new capability/idea arrives mid-implementation:
 - Append it verbatim (with date + context) to `FUTURE_RESEARCH.md`.
 - Acknowledge it is parked, and continue the current milestone.
 
+## Milestone Deferral Protocol (added 2026-06-29)
+No milestone may be marked deferred (esp. "indefinitely") until a **dependency audit** is completed
+and recorded in `DEPENDENCY_AUDIT.md`. For each milestone to defer, run:
+1. Identify every future phase that depends on it.
+2. List all **direct** dependencies (a milestone's acceptance test names it as an input).
+3. List all **indirect** dependencies (could use it; chosen architecture doesn't require it).
+4. Determine whether future architecture quality degrades if deferred.
+5. Classify: **FOUNDATIONAL** (cannot defer — implement now) · **SUPPORTING** (defer only if a
+   replacement exists) · **OPTIONAL** (defer safely).
+
+No milestone is skipped without architecture-dependency proof. No engineering shortcuts.
+
 This constitution is the highest law. It is enforced until the Phase A–F milestone gate is met.

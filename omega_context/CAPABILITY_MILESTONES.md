@@ -33,16 +33,19 @@ Validation: `tests/test_event_bus.py` (12 tests) + `tests/test_phase_a_integrati
 
 ---
 
-## PHASE B — STATE MANAGER + WORLD-STATE ENGINE  (status: 🔶 IN PROGRESS — 17/24 PASS)
+## PHASE B — STATE MANAGER + WORLD-STATE ENGINE  (status: 🔶 IN PROGRESS — 18/24 PASS)
 
 > **Checkpoint 1 (2026-06-28):** B1, B2, B3, B4, B9 + History Ledger BL1–BL10.
 > **Checkpoint 2 (2026-06-28):** B10, B11 — full WorldState serialization + crash-safe
-> restore-on-boot (restart = pause/resume), via `continuity.py` (`ContinuityManager`:
-> provider registry, atomic write, autosave, atexit, tolerant load). Live event-bus queues are
-> intentionally NOT persisted (transient/unsafe); durable history lives in the ledger.
-> **Remaining (next checkpoints, fixed order):** B5 (formal multi-rate scheduler) → diagnostics
-> layer (`shared_core/diagnostics/`) → then B6 (full OS coverage), B7 (UI-tree), B8 (window
-> hierarchy), B12 (backpressure test), B13 (final test set).
+> restore-on-boot (restart = pause/resume), via `continuity.py`.
+> **Checkpoint 3 (2026-06-29):** B5 — central multi-rate `Scheduler` (`shared_core/scheduler/`):
+> 4-tier priority, drift-free, missed-tick recovery, exception isolation, dynamic control,
+> latency metrics, bounded-queue/overload + coalescer + queue-monitor hooks (B12-ready),
+> snapshot/restore via ContinuityManager with deterministic timing recovery + schema versioning.
+> OS sampler migrated onto it (legacy fallback preserved). LOCKED.
+> **Remaining (fast-track order, per directive):** B12 (activate backpressure) → B13 (final
+> integration validation) → minimal B6 (basic GPU + filesystem-change telemetry) → then Phase C.
+> **Deferred indefinitely:** B7 (deep UI-tree), B8 (deep window hierarchy).
 > Implementation: `shared_core/state_manager/` (`world_state.py`, `manager.py`, `ledger.py`,
 > `ledger_store.py`, `os_sampler.py`, `continuity.py`). Validation: `tests/test_state_manager.py`
 > (8) + `tests/test_continuity.py` (6) + full suite **27 passed** + live restart probe.
@@ -61,10 +64,10 @@ Validation: `tests/test_event_bus.py` (12 tests) + `tests/test_phase_a_integrati
 | B2 | Typed sub-states defined | `SystemState, ScreenState, VisionState, BrowserState, VoiceState, DevState` each populated independently and present in snapshot. | ✅ PASS — `world_state.py` 6 sub-states |
 | B3 | Live state updates from bus | State Manager subscribes to `perception.*`; publishing a perception event mutates the matching WorldState field within one tick. | ✅ PASS — `test_bus_event_updates_state_and_history` + live probe |
 | B4 | Per-field history ring buffers | `state.history("os.cpu", n)` returns the last N timestamped values; bounded memory. | ✅ PASS — `test_bus_event_updates_state_and_history` |
-| B5 | Perception tick scheduler operational | Fixed-rate samplers emit at configured Hz (e.g. OS 4Hz, screen 1Hz); measured rate within tolerance; coalescing prevents backlog. | ⬜ pending — `OSSampler` single-tick foundation laid; formal multi-rate scheduler next |
+| B5 | Perception tick scheduler operational (central multi-rate Scheduler) | Configurable multi-rate tasks; 4-tier priority; concurrent non-blocking; drift-free realign; missed-tick recovery; exception isolation; register/unregister/pause/resume; latency metrics; bounded queue + overload defer (B12 hooks); coalescer + queue-monitor seams; snapshot/restore via ContinuityManager (paused + metrics + timing recovery + schema versioning). | ✅ PASS — `shared_core/scheduler/` + `tests/test_scheduler.py` (23) + `tests/test_scheduler_continuity.py` (2) + 2-process restore probe; migrated OS sampler with legacy fallback; full suite 52 passed |
 | B6 | Continuous OS awareness | CPU/GPU/RAM/network/filesystem-changes/clipboard/terminal-activity/active-app all stream to `perception.os.*` continuously (not on-demand). | 🔶 partial — cpu/mem/focused/terminals/network/clipboard live; GPU + fs-watch pending |
-| B7 | Screen UI-tree extraction | UIAutomation (vendored `.runtime` bindings) yields element tree (role/bounds/text) for the foreground window; published to `perception.screen.ui_tree`. | ⬜ pending |
-| B8 | Window hierarchy model | Open windows + z-order + titles enumerated and queryable from WorldState. | ⬜ pending |
+| B7 | Screen UI-tree extraction | UIAutomation (vendored `.runtime` bindings) yields element tree (role/bounds/text) for the foreground window; published to `perception.screen.ui_tree`. | ⏸️ DEFERRED — **SUPPORTING** (audit A1 in `DEPENDENCY_AUDIT.md`); replacement: OCR + ScreenAgent + active_window. No A–F direct dependency. |
+| B8 | Window hierarchy model | Open windows + z-order + titles enumerated and queryable from WorldState. | ⏸️ DEFERRED — **OPTIONAL** (audit A2 in `DEPENDENCY_AUDIT.md`); active_window/focused_process covers the gate need. No A–F dependency. |
 | B9 | State query API | `state.snapshot()`, `state.get("path")`, `state.history(...)` all operational and documented. | ✅ PASS — `manager.py` snapshot/get/history |
 | B10 | State serialization | Full WorldState + subsystem cursors serialize to the persistence layer on demand and on shutdown. | ✅ PASS — `ContinuityManager` (atomic write, autosave, atexit) + `test_worldstate_snapshot_restore_roundtrip`, `test_save_is_atomic_and_skips_unserializable` |
 | B11 | State restore on boot (restart = pause) | Kill + relaunch restores prior WorldState/cursors; verified by asserting restored snapshot equals pre-shutdown snapshot. | ✅ PASS — `test_continuity_restart_is_resume_not_fresh` + live 2-process restore probe; corrupt/missing snapshot tolerated |

@@ -69,15 +69,47 @@ def build_jarvis(gui=None, command_queue=None):
     # Live machine snapshot + chronological transition ledger (rolling persistence).
     # Additive + crash-proof: failure here never blocks boot.
     state_manager = None
+    os_sampler = None
     try:
         from shared_core.state_manager import build_state_manager, OSSampler
         state_manager = build_state_manager(bus, persist=True)
         state_manager.start()
         os_sampler = OSSampler(bus, interval=2.0)
-        os_sampler.start()
+        # Driven by the central Scheduler (below); legacy .start() is the fallback path.
         log.info(f"StateManager + History Ledger online (ledger size={state_manager.ledger.size()}).")
     except Exception as e:
         log.warning(f"StateManager not started: {e}")
+
+    # ── Central Scheduler (Phase B · B5) ──────────────────────────────────────
+    # One multi-rate scheduler replaces fragmented polling loops. Additive + crash-proof:
+    # if it fails to start, the OS sampler falls back to its own legacy polling thread.
+    scheduler = None
+    try:
+        from shared_core.scheduler import Scheduler, Priority
+        scheduler = Scheduler(max_workers=6)
+        scheduler.start()
+        if os_sampler is not None:
+            def _os_sampler_tick():
+                snap = os_sampler.sample_once()
+                bus.publish("perception.os.snapshot", snap, source="os_sampler")
+            scheduler.register_task("os_sampler", "OS perception sampler", _os_sampler_tick,
+                                    interval=2.0, priority=Priority.BACKGROUND, source_module="main")
+
+        def _scheduler_health():
+            if scheduler is not None:
+                bus.publish("system.health", scheduler.health(), source="scheduler")
+        scheduler.register_task("scheduler_health", "scheduler health heartbeat",
+                                _scheduler_health, interval=10.0, priority=Priority.LOGGING,
+                                source_module="main")
+        log.info("Scheduler online; OS sampler migrated onto scheduler.")
+    except Exception as e:
+        log.warning(f"Scheduler not started: {e}")
+        try:
+            if os_sampler is not None:
+                os_sampler.start()  # legacy fallback: own polling thread
+                log.info("OS sampler on legacy polling thread (scheduler fallback).")
+        except Exception:
+            pass
 
     speaker = Speaker()
     memory = MemoryManager()
@@ -112,6 +144,7 @@ def build_jarvis(gui=None, command_queue=None):
     planner = AutonomousPlanner(ai, brain)
     brain.planner = planner
     brain.state_manager = state_manager   # Phase B: live WorldState + History Ledger (may be None)
+    brain.scheduler = scheduler           # Phase B: central multi-rate scheduler (may be None)
 
     # ── Continuity (Phase B B10/B11): restart = pause/resume, not fresh boot ────
     # Crash-safe: atomic writes + autosave + atexit save. Additive; failure never blocks boot.
@@ -142,6 +175,9 @@ def build_jarvis(gui=None, command_queue=None):
                 brain.pending = tuple(p) if isinstance(p, list) else p
 
         continuity.register_provider("brain", _get_brain_state, _set_brain_state)
+        if scheduler is not None:
+            # B5↔continuity: scheduler runtime state persisted + restored across restarts.
+            continuity.register_provider("scheduler", scheduler.snapshot, scheduler.restore)
         restored = continuity.restore()          # B11: resume prior runtime state
         continuity.start_autosave()
         import atexit
