@@ -16,6 +16,8 @@ import time
 from collections import deque
 from typing import Optional
 
+from .compaction import parse_retention_class
+
 # The retrospective snapshot fields recorded with every transition (BL2).
 LEDGER_FIELDS = (
     "active_window",
@@ -41,21 +43,29 @@ class HistoryLedger:
         self._store = store
         self._lock = threading.Lock()
         if store is not None:
-            # BL8: rehydrate recent history on construction (restart = continuity).
+            # BL8/BC5: rehydrate bounded recent history on construction (restart = continuity).
             try:
-                for tr in store.recent(maxlen):
+                for tr in store.recent(min(maxlen, 100)):
                     self._ring.append(tr)
             except Exception:
                 pass
 
-    def record(self, change: dict, snapshot: dict, ts: Optional[float] = None) -> dict:
+    @property
+    def store(self):
+        return self._store
+
+    def record(self, change: dict, snapshot: dict, ts: Optional[float] = None, retention_class: Optional[str] = None) -> dict:
         """Append one transition. `change` = {path, old, new}; `snapshot` = retrospective fields."""
         full = empty_snapshot()
         full.update({k: snapshot.get(k) for k in LEDGER_FIELDS if k in snapshot})
+        
+        rc = parse_retention_class(retention_class).value
+        
         transition = {
             "ts": ts if ts is not None else time.time(),
             "change": change,
             "snapshot": full,
+            "retention_class": rc,
         }
         with self._lock:
             self._ring.append(transition)          # BL1/BL3: bounded ring
@@ -95,3 +105,23 @@ class HistoryLedger:
     def size(self) -> int:
         with self._lock:
             return len(self._ring)
+
+    def diagnostics(self) -> dict:
+        """BC6: Operational sizing bounds."""
+        import sys
+        with self._lock:
+            ring_size = len(self._ring)
+            mem = sys.getsizeof(self._ring)
+            if ring_size > 0:
+                mem += sum(sys.getsizeof(r) for r in self._ring)
+                
+        store_diag = self._store.diagnostics() if self._store else {}
+        return {
+            "ring_size": ring_size,
+            "memory_usage_bytes": mem,
+            "store": store_diag
+        }
+
+    def close(self) -> None:
+        if self._store:
+            self._store.close()

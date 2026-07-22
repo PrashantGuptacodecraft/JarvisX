@@ -94,11 +94,11 @@ Validation: `tests/test_event_bus.py` (12 tests) + `tests/test_phase_a_integrati
 
 ## PHASE C — MEMORY ENGINE + KNOWLEDGE GRAPH  (status: PENDING — 0/14)
 
-| # | Capability | Acceptance test |
-|---|---|---|
-| C1 | Memory promoted to shared core with shim | `memory/manager.py`+`rag_manager.py` live under `shared_core/memory_engine`; old import paths still work via shim. |
-| C2 | Legacy memory fully operational post-move | All 14 SQLite tables + ChromaDB RAG read/write exactly as before; existing data intact. |
-| C3 | Triple-store schema operational | `(subject, predicate, object, weight, first_seen, last_seen)` table; insert/upsert/query by any field. |
+| # | Capability | Acceptance test | Status |
+|---|---|---|---|
+| C1 | Memory promoted to shared core with shim | `memory/manager.py`+`rag_manager.py` live under `shared_core/memory_engine`; old import paths still work via shim. | ✅ PASS — `tests/test_memory_shim.py` passes |
+| C2 | Legacy memory fully operational post-move | All 14 SQLite tables + ChromaDB RAG read/write exactly as before; existing data intact. | ✅ PASS — `tests/test_memory_c2.py` passes |
+| C3 | Triple-store schema operational | `(subject, predicate, object, weight, first_seen, last_seen)` table; insert/upsert/query by any field. | ✅ PASS — `tests/test_memory_engine_c3.py` passes |
 | C4 | In-memory graph projection | `networkx` graph built from triples; rebuilt on load; consistent with store. |
 | C5 | Entity types registered | Person/Project/File/App/Command/Tool/Event/Habit creatable and typed. |
 | C6 | Relation types operational | works_on/edits/depends_on/precedes/authored_by/located_in insertable and traversable. |

@@ -101,6 +101,8 @@ def build_jarvis(gui=None, command_queue=None):
         scheduler.register_task("scheduler_health", "scheduler health heartbeat",
                                 _scheduler_health, interval=10.0, priority=Priority.LOGGING,
                                 source_module="main")
+        if state_manager is not None:
+            state_manager.set_scheduler(scheduler)
         log.info("Scheduler online; OS sampler migrated onto scheduler.")
     except Exception as e:
         log.warning(f"Scheduler not started: {e}")
@@ -110,6 +112,40 @@ def build_jarvis(gui=None, command_queue=None):
                 log.info("OS sampler on legacy polling thread (scheduler fallback).")
         except Exception:
             pass
+
+    # ── State Compaction Job (Phase B · BC3) ──────────────────────────────────
+    if scheduler is not None and state_manager is not None:
+        try:
+            from shared_core.state_manager import CompactionJob, DEFAULT_COMPACTION_INTERVAL_SECONDS
+            from shared_core.scheduler import Priority
+            
+            compaction_job = CompactionJob(store=state_manager.ledger.store, bus=bus, scheduler=scheduler)
+            scheduler.register_task(
+                task_id="state_compaction",
+                name="State Compaction Maintenance",
+                fn=compaction_job.run_cycle,
+                interval=DEFAULT_COMPACTION_INTERVAL_SECONDS,
+                priority=Priority.LOGGING,
+                source_module="main"
+            )
+            log.info(f"State Compaction Job registered (interval={DEFAULT_COMPACTION_INTERVAL_SECONDS}s).")
+        except Exception as e:
+            log.warning(f"State Compaction Job not registered: {e}")
+
+    # ── Telemetry Engine (Phase B · B6) ───────────────────────────────────────
+    # Continuous CPU/RAM/Disk/GPU sampling + filesystem watcher, run as scheduler tasks,
+    # published to perception.system.* / perception.filesystem.change. Additive + crash-proof.
+    telemetry = None
+    if scheduler is not None:
+        try:
+            import os as _os
+            from shared_core.telemetry import TelemetryEngine
+            watch_dirs = [_os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "workspace")]
+            telemetry = TelemetryEngine(bus, scheduler, watch_paths=watch_dirs)
+            telemetry.start()
+            log.info("TelemetryEngine online (CPU/RAM/Disk/GPU + filesystem watcher).")
+        except Exception as e:
+            log.warning(f"TelemetryEngine not started: {e}")
 
     speaker = Speaker()
     memory = MemoryManager()
@@ -159,10 +195,15 @@ def build_jarvis(gui=None, command_queue=None):
             st = {}
             vm = getattr(brain, "volatile_memory", None)
             if isinstance(vm, dict):
-                st["volatile_memory"] = vm
+                st["volatile_memory"] = {k: vm[k] for i, k in enumerate(vm) if i < 1000}
             pend = getattr(brain, "pending", None)
             if pend is not None:
-                st["pending"] = pend     # reasoning state; persisted only if serializable
+                if isinstance(pend, list):
+                    st["pending"] = pend[-1000:]
+                elif isinstance(pend, dict):
+                    st["pending"] = {k: pend[k] for i, k in enumerate(pend) if i < 1000}
+                else:
+                    st["pending"] = pend     # reasoning state; persisted only if serializable
             return st
 
         def _set_brain_state(data):
@@ -183,6 +224,8 @@ def build_jarvis(gui=None, command_queue=None):
         import atexit
         atexit.register(continuity.stop)
         brain.continuity = continuity
+        if state_manager is not None:
+            state_manager.set_continuity(continuity)
         log.info(f"ContinuityManager online (restored {restored} slice(s)).")
     except Exception as e:
         log.warning(f"ContinuityManager not started: {e}")

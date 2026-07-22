@@ -81,3 +81,26 @@ UIAutomation bindings, published to `perception.screen.ui_tree`.
 FOUNDATIONAL milestone is being deferred. Both deferrals are proven valid under the protocol.
 Re-audit required if a future phase introduces a direct dependency on a full UI element tree or
 multi-window z-order model (at which point B7 may reclassify toward FOUNDATIONAL).
+
+---
+
+## Audit A3 — C4: NetworkX Graph Projection Dependency
+
+**Capability:** In-memory graph projection of the SQLite triple-store using the `networkx` library.
+
+**STEP 1 — Future phases that depend on it**
+- Phase C: C6, C7, C8, C9, C11 require traversing relational edges, paths, and neighbors.
+- Phase D: D3 (Dependency graph), D4 (Call graph), D12 (Autonomous code suggestions) may leverage graph queries.
+- Phase F: F1 (Predictor reads KG habit edges).
+
+**STEP 2 — Direct dependencies**
+- **C4 explicitly mandates `networkx`** as the implementation of the in-memory graph projection.
+
+**STEP 3 — Indirect dependencies**
+- None that bypass C4.
+
+**STEP 4 — Architecture-quality degradation if deferred**
+- **Critical.** Phases C, D, and F require a graph traversal and reasoning engine to fulfill their foundational AI goals. `networkx` is the prescribed dependency for this component. Deferring it blocks C4 and all subsequent dependent milestones.
+
+**STEP 5 — Classification: FOUNDATIONAL**
+- **No deferral allowed.** `networkx>=3.2.1` is a strict, explicit minimum-version constraint for C4. Added via established dependency tracking (`requirements.txt`).

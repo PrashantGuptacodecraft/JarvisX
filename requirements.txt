@@ -28,3 +28,4 @@ pycaw>=20181226
 plyer>=2.1.0
 langdetect>=1.0.9
 opencv-python>=4.8.0
+networkx>=3.2.1

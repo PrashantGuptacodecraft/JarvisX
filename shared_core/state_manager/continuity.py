@@ -28,12 +28,23 @@ _DATA_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data"
 )
 DEFAULT_PATH = os.path.join(_DATA_DIR, "continuity.json")
+DEFAULT_MAX_SNAPSHOT_BYTES = 5 * 1024 * 1024
 
 
 class ContinuityManager:
-    def __init__(self, path: str = DEFAULT_PATH, autosave_interval: float = 15.0):
+    def __init__(self, path: str = DEFAULT_PATH, autosave_interval: float = 15.0, max_snapshot_bytes: int = DEFAULT_MAX_SNAPSHOT_BYTES):
         self.path = path
         self.autosave_interval = float(autosave_interval)
+        try:
+            self.max_snapshot_bytes = int(max_snapshot_bytes)
+            if self.max_snapshot_bytes <= 0:
+                self.max_snapshot_bytes = DEFAULT_MAX_SNAPSHOT_BYTES
+        except (ValueError, TypeError):
+            self.max_snapshot_bytes = DEFAULT_MAX_SNAPSHOT_BYTES
+            
+        # Clamp bounds: 256 KiB to 10 MiB
+        self.max_snapshot_bytes = max(256 * 1024, min(10 * 1024 * 1024, self.max_snapshot_bytes))
+
         self._providers: dict[str, tuple[Callable[[], object], Callable[[object], None]]] = {}
         self._lock = threading.Lock()
         self._autosave_thread = None
@@ -64,10 +75,22 @@ class ContinuityManager:
     def save(self) -> bool:
         """Atomically persist all provider state. Returns True on success."""
         data = self.collect()
+        
+        try:
+            encoded = json.dumps(data).encode("utf-8")
+        except Exception as exc:
+            log.warning(f"continuity save failed (encoding error): {exc}")
+            return False
+            
+        encoded_size = len(encoded)
+        if encoded_size > self.max_snapshot_bytes:
+            log.warning(f"continuity save failed: snapshot size ({encoded_size} bytes) exceeds limit ({self.max_snapshot_bytes} bytes).")
+            return False
+
         tmp = self.path + ".tmp"
         try:
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(data, f)   # data already strict-validated in collect()
+            with open(tmp, "wb") as f:
+                f.write(encoded)
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(tmp, self.path)   # atomic
@@ -87,6 +110,12 @@ class ContinuityManager:
         try:
             if not os.path.exists(self.path):
                 return {}
+                
+            file_size = os.path.getsize(self.path)
+            if file_size > self.max_snapshot_bytes:
+                log.warning(f"continuity load skipped: file size ({file_size} bytes) exceeds limit ({self.max_snapshot_bytes} bytes).")
+                return {}
+                
             with open(self.path, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception as exc:
@@ -131,3 +160,21 @@ class ContinuityManager:
         self._running = False
         if final_save:
             self.save()
+
+    def diagnostics(self) -> dict:
+        """BC6: Operational bounds and serialization size metadata."""
+        try:
+            size = os.path.getsize(self.path) if os.path.exists(self.path) else 0
+        except Exception:
+            size = 0
+            
+        with self._lock:
+            providers = list(self._providers.keys())
+            
+        return {
+            "enabled": self._running,
+            "provider_count": len(providers),
+            "providers": providers,
+            "serialization_size": size,
+            "max_snapshot_bytes": self.max_snapshot_bytes,
+        }

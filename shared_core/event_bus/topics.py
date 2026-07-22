@@ -13,6 +13,8 @@ from __future__ import annotations
 # ── Perception ────────────────────────────────────────────────────────────────
 PERCEPTION = "perception"
 PERCEPTION_OS_ACTIVE_WINDOW = "perception.os.active_window"
+PERCEPTION_SYSTEM_DISK = "perception.system.disk"
+PERCEPTION_SYSTEM_GPU = "perception.system.gpu"
 PERCEPTION_OS_SNAPSHOT = "perception.os.snapshot"
 PERCEPTION_SCREEN_OCR = "perception.screen.ocr"
 PERCEPTION_SCREEN_UI_TREE = "perception.screen.ui_tree"
@@ -49,6 +51,12 @@ SYSTEM_LIFECYCLE = "system.lifecycle"
 SYSTEM_CONFIG = "system.config"
 TOOL_CREATED = "tool.created"
 TOOL_INVOKED = "tool.invoked"
+
+# ── Maintenance ───────────────────────────────────────────────────────────────
+MAINTENANCE_COMPACTION_STARTED = "maintenance.compaction.started"
+MAINTENANCE_COMPACTION_COMPLETED = "maintenance.compaction.completed"
+MAINTENANCE_COMPACTION_SKIPPED = "maintenance.compaction.skipped"
+MAINTENANCE_COMPACTION_FAILED = "maintenance.compaction.failed"
 
 # Catch-all pattern
 ALL = "*"

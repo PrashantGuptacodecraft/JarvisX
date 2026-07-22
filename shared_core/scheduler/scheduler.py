@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import threading
 import time
+from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Callable, Optional
 
@@ -56,6 +57,16 @@ class Scheduler:
         self._queue_monitors: list = []
         # ContinuityManager integration: saved task-state re-applied on (re)registration.
         self._restored_state: dict = {}
+        # B12 backpressure / overload state.
+        self._throttle_factor = 4.0          # low-priority next_run pushed by factor*interval
+        self._overload_state = False
+        self._overload_low_water = 0.5        # clears overload below 50% cap (hysteresis)
+        self._overload_transitions = 0
+        self._dropped_events = 0              # low-priority runs shed under pressure
+        self._peak_queue = 0
+        self._latency_sum = 0.0
+        self._latency_count = 0
+        self._recent_latencies: deque = deque(maxlen=200)
 
     # ── lifecycle ────────────────────────────────────────────────────────────
     def start(self) -> None:
@@ -182,16 +193,23 @@ class Scheduler:
         return due
 
     def _dispatch_batch(self, due: list[ScheduledTask], now: float) -> None:
-        # B12 hook: bounded queue + overload policy (defer low-priority if near cap).
+        # B12: bounded queue + overload handling. Critical is NEVER dropped; low-priority is
+        # throttled/shed under pressure; user is deferred only at the hard cap.
         queue_size = len(self._pending)
-        overload = (queue_size >= self._queue_cap * OVERLOAD_THRESHOLD)
         for task in due:
-            if queue_size >= self._queue_cap:
+            is_low = task.priority in LOW_PRIORITY_DEFER
+            if task.priority == Priority.CRITICAL:
+                pass  # req 5: critical always dispatched, never deferred/dropped
+            elif is_low and (queue_size >= self._queue_cap * OVERLOAD_THRESHOLD
+                             or self._overload_state):
+                # req 3/4: adaptive throttle — shed low-priority + push its next run out.
                 task.deferred += 1
                 self._overload_defers += 1
+                self._dropped_events += 1
+                task.next_run += self._throttle_factor * task.interval
                 continue
-            if overload and task.priority in LOW_PRIORITY_DEFER:
-                task.deferred += 1
+            elif task.priority == Priority.USER and queue_size >= self._queue_cap:
+                task.deferred += 1            # interaction backpressure (deferred, not dropped)
                 self._overload_defers += 1
                 continue
             # Realign next_run (missed-tick recovery: skip to next valid boundary).
@@ -204,6 +222,23 @@ class Scheduler:
             with self._lock:
                 self._pending[task.id] = fut
             queue_size += 1
+        # Evaluate overload against the within-tick peak (production vs. consumption),
+        # not just the tick-start depth — short tasks drain between ticks.
+        self._update_overload_state(queue_size)
+
+    def _update_overload_state(self, queue_size: int) -> None:
+        """Continuously track queue depth + overload state with hysteresis (req 1,2,8)."""
+        if queue_size > self._peak_queue:
+            self._peak_queue = queue_size
+        high = self._queue_cap * OVERLOAD_THRESHOLD
+        low = self._queue_cap * self._overload_low_water
+        if not self._overload_state and queue_size >= high:
+            self._overload_state = True
+            self._overload_transitions += 1
+            log.warning(f"[scheduler] OVERLOAD entered (queue={queue_size}/{self._queue_cap})")
+        elif self._overload_state and queue_size <= low:
+            self._overload_state = False
+            log.info(f"[scheduler] overload cleared (queue={queue_size}/{self._queue_cap})")
 
     def _execute(self, task: ScheduledTask, dispatch_time: float) -> None:
         """Run a single task with exception isolation + latency tracking."""
@@ -218,6 +253,9 @@ class Scheduler:
         task.record_completion(latency, error)
         with self._lock:
             self._pending.pop(task.id, None)
+            self._latency_sum += latency
+            self._latency_count += 1
+            self._recent_latencies.append(latency)
 
     def _sleep_adaptive(self, target: float) -> None:
         """High-precision sleep: coarse sleep + busy-wait for final 5ms."""
@@ -248,6 +286,25 @@ class Scheduler:
         """B12 hook: current pending task count for external monitors."""
         with self._lock:
             return len(self._pending)
+
+    def diagnostics(self) -> dict:
+        """B12 backpressure diagnostics (req 9)."""
+        with self._lock:
+            qd = len(self._pending)
+            avg = (self._latency_sum / self._latency_count) if self._latency_count else 0.0
+            recent = list(self._recent_latencies)
+        recent_avg = (sum(recent) / len(recent)) if recent else 0.0
+        coalescer_drops = getattr(self._coalescer, "dropped", 0) if self._coalescer else 0
+        return {
+            "queue_depth": qd,
+            "queue_cap": self._queue_cap,
+            "peak_queue": self._peak_queue,
+            "overload": self._overload_state,
+            "overload_transitions": self._overload_transitions,
+            "dropped_events": self._dropped_events + coalescer_drops,
+            "avg_latency_ms": round(avg * 1000, 3),
+            "recent_latency_ms": [round(x * 1000, 3) for x in recent[-10:]],
+        }
 
     # ── ContinuityManager integration (snapshot / restore) ───────────────────
     def snapshot(self) -> dict:

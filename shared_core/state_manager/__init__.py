@@ -26,6 +26,9 @@ def build_state_manager(bus, *, persist: bool = True, ring_len: int = 5000,
     return StateManager(bus, ledger=ledger)
 
 
+from .compaction_job import CompactionJob, DEFAULT_COMPACTION_INTERVAL_SECONDS
+from .history_models import Cursor, ResolutionMode, HistoricalRecord, HistoricalPage
+
 __all__ = [
     "StateManager",
     "WorldState",
@@ -35,4 +38,10 @@ __all__ = [
     "ContinuityManager",
     "LEDGER_FIELDS",
     "build_state_manager",
+    "CompactionJob",
+    "DEFAULT_COMPACTION_INTERVAL_SECONDS",
+    "Cursor",
+    "ResolutionMode",
+    "HistoricalRecord",
+    "HistoricalPage",
 ]

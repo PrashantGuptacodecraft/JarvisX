@@ -1,0 +1,107 @@
+[
+  {
+    "name": "sqlite_autoindex_command_patterns_1",
+    "type": "index",
+    "sql": null
+  },
+  {
+    "name": "sqlite_autoindex_contacts_1",
+    "type": "index",
+    "sql": null
+  },
+  {
+    "name": "sqlite_autoindex_knowledge_docs_1",
+    "type": "index",
+    "sql": null
+  },
+  {
+    "name": "sqlite_autoindex_missions_1",
+    "type": "index",
+    "sql": null
+  },
+  {
+    "name": "sqlite_autoindex_profile_entries_1",
+    "type": "index",
+    "sql": null
+  },
+  {
+    "name": "sqlite_autoindex_projects_1",
+    "type": "index",
+    "sql": null
+  },
+  {
+    "name": "sqlite_autoindex_workflows_1",
+    "type": "index",
+    "sql": null
+  },
+  {
+    "name": "command_patterns",
+    "type": "table",
+    "sql": "CREATE TABLE command_patterns (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                prev_cmd TEXT NOT NULL,\n                next_cmd TEXT NOT NULL,\n                count INTEGER NOT NULL DEFAULT 1,\n                last_seen TEXT NOT NULL,\n                UNIQUE(prev_cmd, next_cmd)\n            )"
+  },
+  {
+    "name": "contacts",
+    "type": "table",
+    "sql": "CREATE TABLE contacts (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                name TEXT NOT NULL,\n                phone TEXT NOT NULL,\n                channel TEXT NOT NULL DEFAULT 'whatsapp',\n                created TEXT NOT NULL,\n                UNIQUE(name, channel)\n            )"
+  },
+  {
+    "name": "episodes",
+    "type": "table",
+    "sql": "CREATE TABLE episodes (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                description TEXT NOT NULL,\n                source TEXT NOT NULL DEFAULT 'user',\n                tags TEXT NOT NULL DEFAULT '',\n                timestamp TEXT NOT NULL\n            )"
+  },
+  {
+    "name": "facts",
+    "type": "table",
+    "sql": "CREATE TABLE facts (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                key TEXT,\n                value TEXT,\n                created TEXT\n            )"
+  },
+  {
+    "name": "history",
+    "type": "table",
+    "sql": "CREATE TABLE history (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                user_text TEXT,\n                jarvis_text TEXT,\n                timestamp TEXT\n            )"
+  },
+  {
+    "name": "knowledge_docs",
+    "type": "table",
+    "sql": "CREATE TABLE knowledge_docs (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                title TEXT NOT NULL,\n                source_path TEXT NOT NULL UNIQUE,\n                content TEXT NOT NULL,\n                summary TEXT NOT NULL DEFAULT '',\n                created TEXT NOT NULL,\n                updated TEXT NOT NULL\n            )"
+  },
+  {
+    "name": "missions",
+    "type": "table",
+    "sql": "CREATE TABLE missions (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                name TEXT NOT NULL UNIQUE,\n                objective TEXT NOT NULL,\n                status TEXT NOT NULL DEFAULT 'active',\n                next_action TEXT NOT NULL DEFAULT '',\n                notes TEXT NOT NULL DEFAULT '',\n                plan_json TEXT NOT NULL DEFAULT '[]',\n                created TEXT NOT NULL,\n                updated TEXT NOT NULL\n            )"
+  },
+  {
+    "name": "notes",
+    "type": "table",
+    "sql": "CREATE TABLE notes (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                content TEXT,\n                created TEXT\n            )"
+  },
+  {
+    "name": "profile_entries",
+    "type": "table",
+    "sql": "CREATE TABLE profile_entries (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                category TEXT NOT NULL DEFAULT 'general',\n                key TEXT NOT NULL,\n                value TEXT NOT NULL,\n                created TEXT NOT NULL,\n                updated TEXT NOT NULL,\n                UNIQUE(category, key)\n            )"
+  },
+  {
+    "name": "projects",
+    "type": "table",
+    "sql": "CREATE TABLE projects (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                name TEXT NOT NULL UNIQUE,\n                summary TEXT NOT NULL,\n                details TEXT NOT NULL,\n                status TEXT NOT NULL DEFAULT '',\n                next_steps TEXT NOT NULL DEFAULT '',\n                tags TEXT NOT NULL DEFAULT '',\n                created TEXT NOT NULL,\n                updated TEXT NOT NULL\n            )"
+  },
+  {
+    "name": "reminders",
+    "type": "table",
+    "sql": "CREATE TABLE reminders (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                task TEXT,\n                remind_at TEXT,\n                done INTEGER DEFAULT 0\n            )"
+  },
+  {
+    "name": "sqlite_sequence",
+    "type": "table",
+    "sql": "CREATE TABLE sqlite_sequence(name,seq)"
+  },
+  {
+    "name": "todos",
+    "type": "table",
+    "sql": "CREATE TABLE todos (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                item TEXT,\n                done INTEGER DEFAULT 0,\n                created TEXT\n            )"
+  },
+  {
+    "name": "workflows",
+    "type": "table",
+    "sql": "CREATE TABLE workflows (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                name TEXT NOT NULL UNIQUE,\n                description TEXT NOT NULL DEFAULT '',\n                steps_json TEXT NOT NULL,\n                tags TEXT NOT NULL DEFAULT '',\n                created TEXT NOT NULL,\n                updated TEXT NOT NULL,\n                last_run TEXT NOT NULL DEFAULT ''\n            )"
+  }
+]

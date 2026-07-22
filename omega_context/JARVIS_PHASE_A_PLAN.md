@@ -11,7 +11,7 @@
 | Phase | Priority | Subsystem | Milestones | Gate |
 |---|---|---|---|---|
 | **A** | P1 | Shared Core **Event Bus** | 10 (A1–A10) | unblocks all others |
-| **B** | P2 | **State Manager + World-State Engine** (+ History Ledger) | 24 (B1–B14 + BL1–BL10) | needs A |
+| **B** | P2 | **State Manager + World-State Engine** (+ History Ledger + Compaction) | 30 (B1–B14 + BL1–BL10 + BC1–BC6) | needs A |
 | **C** | P3 | **Memory Engine + Knowledge Graph** | 14 (C1–C14) | needs A, B |
 | **D** | P4 | **Developer Super-Intelligence** (flagship) | 16 (D1–D16) | needs A, B, C |
 | **E** | P5 | **Autonomous Tool Factory** | 12 (E1–E12) | needs A, C, D |
@@ -20,7 +20,7 @@
 Dependencies are strictly downward — A is the spine, everything rides it. Phases B/C can overlap once A lands; D is the flagship and the largest lift; E/F build on the substrate.
 
 ### Definition of "JARVIS research-lab level"
-Not a percentage — a milestone gate: **all 89 capability milestones across Phases A–F PASS**,
+Not a percentage — a milestone gate: **all 95 capability milestones across Phases A–F PASS**,
 each validated by its acceptance test in `CAPABILITY_MILESTONES.md`. Browser/Deployment/
 multimodal-depth are deliberately **out of the A–F milestone set** (post-gate polish). The OMEGA
 freeze lifts only when the A–F gate is met.

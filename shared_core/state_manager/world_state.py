@@ -24,6 +24,12 @@ class SystemState:
     focused_process: Optional[str] = None    # foreground window's process name
     running_terminals: list = field(default_factory=list)
     network_summary: dict = field(default_factory=dict)
+    # ── B6 continuous telemetry (additive) ──
+    cpu_detail: dict = field(default_factory=dict)     # frequency, core_count, per_core
+    memory_detail: dict = field(default_factory=dict)  # total/used/free/swap
+    disk: dict = field(default_factory=dict)           # usage, throughput, free
+    gpu_detail: dict = field(default_factory=dict)     # usage, mem_used, temperature
+    last_fs_change: dict = field(default_factory=dict) # {event, path}
 
 
 @dataclass
@@ -112,16 +118,24 @@ class WorldState:
 
     def snapshot(self) -> dict:
         """JSON-serializable dict of the entire present state."""
+        def _cap_collections(d: dict) -> dict:
+            """Recursively bound lists and dicts to at most 1000 items to prevent unbounded serialization."""
+            if isinstance(d, dict):
+                return {k: _cap_collections(v) for i, (k, v) in enumerate(d.items()) if i < 1000}
+            if isinstance(d, list):
+                return [_cap_collections(v) for i, v in enumerate(d) if i < 1000]
+            return d
+
         with self._lock:
             return {
                 "version": self._version,
                 "updated": self._updated,
-                "system": asdict(self.system),
-                "screen": asdict(self.screen),
-                "vision": asdict(self.vision),
-                "browser": asdict(self.browser),
-                "voice": asdict(self.voice),
-                "dev": asdict(self.dev),
+                "system": _cap_collections(asdict(self.system)),
+                "screen": _cap_collections(asdict(self.screen)),
+                "vision": _cap_collections(asdict(self.vision)),
+                "browser": _cap_collections(asdict(self.browser)),
+                "voice": _cap_collections(asdict(self.voice)),
+                "dev": _cap_collections(asdict(self.dev)),
             }
 
     def restore(self, snap: dict) -> None:
