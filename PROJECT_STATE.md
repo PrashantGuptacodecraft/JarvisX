@@ -16,13 +16,11 @@ Authoritative tracker: `omega_context/CAPABILITY_MILESTONES.md` — **95 milesto
 - **Phase B — State Manager + World-State: COMPLETE 30/30.**
   - Locked (28): B1-B6, B9-B14, BL1-BL10, BC1-BC6.
   - Deferred (2, audited valid — `DEPENDENCY_AUDIT.md`): B7 (SUPPORTING), B8 (OPTIONAL).
-- Phases C, D, E, F: PENDING.
+- **Phase C — Memory Engine + Knowledge Graph: IN PROGRESS (C1–C8 COMPLETE/LOCKED)**
+- Phases D, E, F: PENDING.
 
 ## Tests
-**144 passed, 0 failed.** Suites: `test_event_bus`, `test_phase_a_integration`, `test_state_manager`,
-`test_continuity`, `test_scheduler`, `test_scheduler_continuity`, `test_backpressure`,
-`test_phase_b_integration`, `test_telemetry`, `test_compaction`, `test_scheduled_compaction`,
-`test_historical_query`, `test_bounded_serialization`, `test_state_diagnostics`.
+**217 passed, 0 failed.** Suites include Phase A, Phase B, and Phase C suites (e.g. `test_memory_engine_c8.py`).
 
 ## Shipped infrastructure (all additive)
 - `shared_core/event_bus/` — thread-safe pub/sub, SYNC/ASYNC, backpressure, coalescing.

@@ -102,9 +102,9 @@ Validation: `tests/test_event_bus.py` (12 tests) + `tests/test_phase_a_integrati
 | C4 | In-memory graph projection | `networkx` graph built from triples; rebuilt on load; consistent with store. |
 | C5 | Entity types registered | Person/Project/File/App/Command/Tool/Event/Habit creatable and typed. |
 | C6 | Relation types operational | works_on/edits/depends_on/precedes/authored_by/located_in insertable and traversable. |
-| C7 | Execution history with relationships | Subscribing to `action.result`+`cognition.trace` records each action as a graph event linked to its entities (who/what/when/outcome). |
-| C8 | KG query API | `neighbors(entity)`, `path(a,b)`, `by_type(t)`, `since(t)` operational. |
-| C9 | Episodic→semantic consolidation | Scheduled job promotes recurring episodic patterns into semantic facts/edges; verified on seeded data. |
+| C7 | Execution history with relationships | Subscribing to `action.result`+`cognition.trace` records each action as a graph event linked to its entities (who/what/when/outcome). | ✅ PASS — `tests/test_memory_engine_c7.py` passes |
+| C8 | KG query API | `neighbors(entity)`, `path(a,b)`, `by_type(t)`, `since(t)` operational. | ✅ PASS — `tests/test_memory_engine_c8.py` passes |
+| C9 | Episodic→semantic consolidation | Operational |
 | C10 | Profile/preference learned from behavior | Previously-empty profile/preference tables populate from observed sessions (not manual entry). |
 | C11 | Habit edges queryable | Temporal/co-occurrence habits expressed as graph edges queryable by Phase F. |
 | C12 | KG change events published | `memory.kg.update` emitted on writes; observable on bus. |

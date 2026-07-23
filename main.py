@@ -22,6 +22,7 @@ from voice.speaker import Speaker
 from voice.listener import Listener
 
 from memory.manager import MemoryManager
+from shared_core.memory_engine.execution_history import ExecutionRecorder
 
 from tools.apps.controller import AppController
 from tools.browser.controller import BrowserController
@@ -149,6 +150,31 @@ def build_jarvis(gui=None, command_queue=None):
 
     speaker = Speaker()
     memory = MemoryManager()
+    
+    # ── Phase C7: Execution History Recorder ──
+    execution_recorder = ExecutionRecorder(memory_manager=memory, event_bus=bus)
+    execution_recorder.start()
+    
+    # ── Phase C9: Consolidation Job ──
+    if scheduler is not None:
+        try:
+            from shared_core.memory_engine.consolidation import ConsolidationJob
+            from shared_core.memory_engine.kg_query import KGQueryService
+            from shared_core.scheduler import Priority
+            
+            c_job = ConsolidationJob(memory_manager=memory, kg_query_service=KGQueryService(memory))
+            scheduler.register_task(
+                task_id="consolidation_job",
+                name="Phase C9 Consolidation",
+                fn=c_job.run_once,
+                interval=86400.0,
+                priority=Priority.BACKGROUND,
+                source_module="main"
+            )
+            log.info("ConsolidationJob registered (interval=86400.0s).")
+        except Exception as e:
+            log.warning(f"ConsolidationJob not registered: {e}")
+            
     ai = AIClient()
     files = FilesController(memory=memory)
 

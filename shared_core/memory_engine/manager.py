@@ -13,6 +13,7 @@ from config.logger import get_logger
 from config.settings import DB_PATH, FALLBACK_DB_PATH, USER_NAME
 from shared_core.memory_engine.graph_projection import GraphProjection
 from shared_core.memory_engine.entity_types import EntityType
+from shared_core.memory_engine.relation_types import RelationType
 
 log = get_logger("memory")
 
@@ -201,6 +202,7 @@ class MemoryManager:
             );
             CREATE INDEX IF NOT EXISTS idx_kg_subject ON kg_triples(subject);
             CREATE INDEX IF NOT EXISTS idx_kg_object ON kg_triples(object);
+            CREATE INDEX IF NOT EXISTS idx_kg_triples_last_seen_id ON kg_triples(last_seen, id);
             """
         )
         self.conn.commit()
@@ -1315,6 +1317,24 @@ class MemoryManager:
         # but the GraphProjection internally validates the revision under its own lock.
         self.kg_projection.build_projection(triples, current_revision, total_count, now)
 
+    def _upsert_triple_cursor(self, cursor, subject: str, predicate: str, object: str, weight: float, now: str) -> int:
+        row = cursor.execute(
+            """
+            INSERT INTO kg_triples (subject, predicate, object, weight, first_seen, last_seen)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(subject, predicate, object) DO UPDATE SET
+                weight = CASE
+                    WHEN excluded.last_seen >= kg_triples.last_seen THEN excluded.weight
+                    ELSE kg_triples.weight
+                END,
+                first_seen = MIN(kg_triples.first_seen, excluded.first_seen),
+                last_seen = MAX(kg_triples.last_seen, excluded.last_seen)
+            RETURNING id
+            """,
+            (subject, predicate, object, float(weight), now, now)
+        ).fetchone()
+        return row[0] if row else None
+
     def upsert_triple(self, subject: str, predicate: str, object: str, weight: float = 1.0, observed_at: str = None) -> int:
         """Upsert a relation into the triple-store knowledge graph.
         Returns the stable row ID of the inserted or updated triple.
@@ -1329,27 +1349,13 @@ class MemoryManager:
         now = observed_at or datetime.datetime.now(datetime.timezone.utc).isoformat()
         with self._lock:
             # We use RETURNING id to get the stable ID.
-            row = self.conn.execute(
-                """
-                INSERT INTO kg_triples (subject, predicate, object, weight, first_seen, last_seen)
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(subject, predicate, object) DO UPDATE SET
-                    weight = CASE
-                        WHEN excluded.last_seen >= kg_triples.last_seen THEN excluded.weight
-                        ELSE kg_triples.weight
-                    END,
-                    first_seen = MIN(kg_triples.first_seen, excluded.first_seen),
-                    last_seen = MAX(kg_triples.last_seen, excluded.last_seen)
-                RETURNING id
-                """,
-                (subject, predicate, object, float(weight), now, now)
-            ).fetchone()
+            cursor = self.conn.cursor()
+            triple_id = self._upsert_triple_cursor(cursor, subject, predicate, object, weight, now)
             self.conn.commit()
             
-            if row:
+            if triple_id is not None:
                 self._kg_revision += 1
                 new_revision = self._kg_revision
-                triple_id = row[0]
                 
                 # Fetch back the authoritative values (e.g. if it updated)
                 updated_row = self.conn.execute(
@@ -1421,6 +1427,62 @@ class MemoryManager:
 
     # ?????? Entities (Phase C5) ?????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
 
+    def promote_semantic_pattern(self, record: dict) -> bool:
+        """
+        Atomically promote a semantic pattern (C9).
+        """
+        import datetime
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        if not all(k in record for k in ("habit_id", "actor", "action", "outcome")):
+            return False
+            
+        with self._lock:
+            cursor = self.conn.cursor()
+            try:
+                from shared_core.memory_engine.entity_types import EntityType
+                self._upsert_triple_cursor(cursor, record["habit_id"], "type", EntityType.HABIT.value, 1.0, now)
+                self._upsert_triple_cursor(cursor, record["actor"], "has_recurring_pattern", record["habit_id"], 1.0, now)
+                self._upsert_triple_cursor(cursor, record["habit_id"], "pattern_actor", record["actor"], 1.0, now)
+                
+                action_lit = record["action"] if record["action"].startswith("literal:action:") else f"literal:action:{record['action']}"
+                self._upsert_triple_cursor(cursor, record["habit_id"], "pattern_action", action_lit, 1.0, now)
+                
+                outcome_lit = record["outcome"] if record["outcome"].startswith("literal:outcome:") else f"literal:outcome:{record['outcome']}"
+                self._upsert_triple_cursor(cursor, record["habit_id"], "pattern_outcome", outcome_lit, 1.0, now)
+                
+                for t in record.get("targets", []):
+                    self._upsert_triple_cursor(cursor, record["habit_id"], "pattern_target", t, 1.0, now)
+                for e in record.get("evidence", []):
+                    self._upsert_triple_cursor(cursor, record["habit_id"], "derived_from", e, 1.0, now)
+                    
+                self.conn.commit()
+                self._kg_revision += 1
+                new_revision = self._kg_revision
+                
+                cursor.execute("SELECT subject, predicate, object, weight, first_seen, last_seen, id FROM kg_triples WHERE subject = ? OR object = ?", (record["habit_id"], record["habit_id"]))
+                rows = cursor.fetchall()
+            except Exception as e:
+                self.conn.rollback()
+                log.error(f"Failed to promote semantic pattern: {e}")
+                return False
+                
+        # Outside the lock
+        for row in rows:
+            try:
+                self.kg_projection.sync_edge(
+                    triple_id=row[6],
+                    subject=row[0],
+                    predicate=row[1],
+                    obj=row[2],
+                    weight=row[3],
+                    first_seen=row[4],
+                    last_seen=row[5],
+                    new_revision=new_revision
+                )
+            except Exception:
+                self.kg_projection.mark_stale(new_revision)
+        return True
+
     def register_entity(self, name: str, entity_type: EntityType, weight: float = 1.0) -> int:
         """Registers or updates an entity's type in the knowledge graph."""
         if not isinstance(entity_type, EntityType):
@@ -1433,3 +1495,110 @@ class MemoryManager:
             raise ValueError(f"entity_type must be an instance of EntityType, got {type(entity_type)}")
         rows = self.query_triples(predicate="type", object=entity_type.value, limit=limit)
         return [row["subject"] for row in rows]
+
+    # ════════ Relations (Phase C6) ════════════════════════════════════════════════════════════════════════════════════════════
+
+    def add_relation(self, subject: str, relation_type: RelationType, object: str, weight: float = 1.0) -> int:
+        """Registers a strictly typed relation between two entities."""
+        if not isinstance(relation_type, RelationType):
+            raise ValueError(f"relation_type must be an instance of RelationType, got {type(relation_type)}")
+        return self.upsert_triple(subject, relation_type.value, object, weight=weight)
+
+    def get_relations(self, subject: str = None, relation_type: RelationType = None, object: str = None, limit: int = 100) -> list[dict]:
+        """Retrieves typed relations matching the given criteria."""
+        if relation_type is not None and not isinstance(relation_type, RelationType):
+            raise ValueError(f"relation_type must be an instance of RelationType, got {type(relation_type)}")
+        
+        predicate = relation_type.value if relation_type else None
+        return self.query_triples(subject=subject, predicate=predicate, object=object, limit=limit)
+
+    # ════════ Execution Events (Phase C7) ═════════════════════════════════════════════════════════════════════════════════════
+
+    def record_execution_event(self, event_id: str, actor: str, action: str, outcome: str, targets: list[str],
+                               timestamp: str, source_relation: str = None, source: str = None) -> bool:
+        """
+        Atomically persists an execution event.
+        Includes type triple, required properties (actor, action, outcome, occurred_at), and optional targets/source.
+        Synchronizes the projection outside the DB lock.
+        """
+        from shared_core.memory_engine.execution_predicates import ExecutionPredicate
+
+        if not event_id or not action or not outcome or not timestamp:
+            raise ValueError("event_id, action, outcome, and timestamp are required")
+            
+        triples_to_sync = []
+        with self._lock:
+            cursor = self.conn.cursor()
+            try:
+                # 0. Conflicting duplicate policy: Check if event exists
+                existing = cursor.execute("SELECT predicate, object FROM kg_triples WHERE subject = ?", (event_id,)).fetchall()
+                if existing:
+                    existing_map = {row[0]: row[1] for row in existing}
+                    
+                    # Verify fields match
+                    if existing_map.get(ExecutionPredicate.ACTION) != action or \
+                       existing_map.get(ExecutionPredicate.OUTCOME) != outcome or \
+                       existing_map.get(ExecutionPredicate.OCCURRED_AT) != timestamp or \
+                       (actor and existing_map.get(ExecutionPredicate.PERFORMED_BY) != actor):
+                        log.warning(f"Rejecting conflicting duplicate for event {event_id}")
+                        return False
+                    # For targets and sources, if it's an exact match in core fields, we consider it an exact duplicate.
+                    # We proceed to idempotent upsert which updates last_seen.
+
+                # 1. Register Event Type
+                t_id = self._upsert_triple_cursor(cursor, event_id, "type", EntityType.EVENT.value, 1.0, timestamp)
+                triples_to_sync.append(t_id)
+
+                # 2. Required properties
+                if actor:
+                    t_id = self._upsert_triple_cursor(cursor, event_id, ExecutionPredicate.PERFORMED_BY, actor, 1.0, timestamp)
+                    triples_to_sync.append(t_id)
+                t_id = self._upsert_triple_cursor(cursor, event_id, ExecutionPredicate.ACTION, action, 1.0, timestamp)
+                triples_to_sync.append(t_id)
+                t_id = self._upsert_triple_cursor(cursor, event_id, ExecutionPredicate.OUTCOME, outcome, 1.0, timestamp)
+                triples_to_sync.append(t_id)
+                t_id = self._upsert_triple_cursor(cursor, event_id, ExecutionPredicate.OCCURRED_AT, timestamp, 1.0, timestamp)
+                triples_to_sync.append(t_id)
+
+                # 3. Optional targets (C6 relation)
+                if targets:
+                    for target in targets:
+                        # Assuming the relation from event to target is TARGET, or if it maps to WORKS_ON/EDITS etc
+                        t_id = self._upsert_triple_cursor(cursor, event_id, ExecutionPredicate.TARGET, target, 1.0, timestamp)
+                        triples_to_sync.append(t_id)
+
+                # 4. Optional source/parent
+                if source_relation and source:
+                    t_id = self._upsert_triple_cursor(cursor, event_id, source_relation, source, 1.0, timestamp)
+                    triples_to_sync.append(t_id)
+
+                self.conn.commit()
+            except Exception as e:
+                self.conn.rollback()
+                log.error(f"Failed to record execution event {event_id}: {e}")
+                return False
+
+            self._kg_revision += 1
+            new_revision = self._kg_revision
+            
+            # Fetch back authoritative values for sync
+            sync_data = []
+            for tid in triples_to_sync:
+                if tid:
+                    row = cursor.execute(
+                        "SELECT subject, predicate, object, weight, first_seen, last_seen FROM kg_triples WHERE id = ?",
+                        (tid,)
+                    ).fetchone()
+                    if row:
+                        sync_data.append((tid, *row))
+
+        # Synchronize outside lock
+        for data in sync_data:
+            tid, subj, pred, obj, weight, f_seen, l_seen = data
+            if not self.kg_projection.sync_edge(
+                triple_id=tid, subject=subj, predicate=pred, obj=obj,
+                weight=weight, first_seen=f_seen, last_seen=l_seen, new_revision=new_revision
+            ):
+                self.kg_projection.mark_stale(new_revision)
+                
+        return True
