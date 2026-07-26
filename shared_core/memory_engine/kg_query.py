@@ -251,3 +251,46 @@ class KGQueryService:
                 }
                 for row in rows
             ]
+
+    def get_actor_habits(self, actor_id: str) -> List[Dict[str, Any]]:
+        """
+        Retrieves all semantic habits for a given actor.
+        Resolves outgoing habit edges (action, target, outcome) into a structured dictionary.
+        """
+        from shared_core.memory_engine.consolidation_predicates import ConsolidationPredicate
+        
+        habits = []
+        # Find all habit entities this actor has
+        habit_edges = self.neighbors(actor_id, direction="out", relation_type=ConsolidationPredicate.HAS_RECURRING_PATTERN)
+        
+        for edge in habit_edges:
+            habit_id = edge["neighbor"]
+            habit_dict = {
+                "habit_id": habit_id,
+                "actor": actor_id,
+                "action": None,
+                "outcome": None,
+                "targets": [],
+                "evidence": []
+            }
+            
+            # Fetch all outgoing edges from this habit_id
+            habit_props = self.neighbors(habit_id, direction="out")
+            for prop in habit_props:
+                pred = prop["predicate"]
+                obj = prop["neighbor"]
+                
+                if pred == ConsolidationPredicate.PATTERN_ACTION:
+                    habit_dict["action"] = obj
+                elif pred == ConsolidationPredicate.PATTERN_OUTCOME:
+                    habit_dict["outcome"] = obj
+                elif pred == ConsolidationPredicate.PATTERN_TARGET:
+                    habit_dict["targets"].append(obj)
+                elif pred == ConsolidationPredicate.DERIVED_FROM:
+                    habit_dict["evidence"].append(obj)
+                    
+            habit_dict["targets"].sort()
+            habit_dict["evidence"].sort()
+            habits.append(habit_dict)
+            
+        return habits

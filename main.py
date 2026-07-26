@@ -174,6 +174,26 @@ def build_jarvis(gui=None, command_queue=None):
             log.info("ConsolidationJob registered (interval=86400.0s).")
         except Exception as e:
             log.warning(f"ConsolidationJob not registered: {e}")
+
+    # ── Phase C10: Preference Learning Job ──
+    if scheduler is not None:
+        try:
+            from shared_core.memory_engine.preference_learning import PreferenceLearningJob
+            from shared_core.memory_engine.kg_query import KGQueryService
+            from shared_core.scheduler import Priority
+            
+            p_job = PreferenceLearningJob(memory_manager=memory, kg_query_service=KGQueryService(memory))
+            scheduler.register_task(
+                task_id="preference_learning_job",
+                name="Phase C10 Preference Learning",
+                fn=p_job.run_once,
+                interval=86400.0,
+                priority=Priority.BACKGROUND,
+                source_module="main"
+            )
+            log.info("PreferenceLearningJob registered (interval=86400.0s).")
+        except Exception as e:
+            log.warning(f"PreferenceLearningJob not registered: {e}")
             
     ai = AIClient()
     files = FilesController(memory=memory)

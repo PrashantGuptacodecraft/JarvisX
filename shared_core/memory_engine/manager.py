@@ -1374,6 +1374,16 @@ class MemoryManager:
                         last_seen=updated_row[5],
                         new_revision=new_revision
                     )
+                    
+                    from shared_core import publish_safe
+                    from shared_core.event_bus.topics import MEMORY_KG_UPDATE
+                    publish_safe(MEMORY_KG_UPDATE, {
+                        "action": "upsert",
+                        "subject": updated_row[0],
+                        "predicate": updated_row[1],
+                        "object": updated_row[2],
+                        "triple_id": triple_id
+                    }, source="memory_engine")
                 else:
                     self.kg_projection.mark_stale(new_revision)
                 return triple_id
@@ -1479,6 +1489,16 @@ class MemoryManager:
                     last_seen=row[5],
                     new_revision=new_revision
                 )
+                
+                from shared_core import publish_safe
+                from shared_core.event_bus.topics import MEMORY_KG_UPDATE
+                publish_safe(MEMORY_KG_UPDATE, {
+                    "action": "upsert",
+                    "subject": row[0],
+                    "predicate": row[1],
+                    "object": row[2],
+                    "triple_id": row[6]
+                }, source="memory_engine")
             except Exception:
                 self.kg_projection.mark_stale(new_revision)
         return True
