@@ -31,6 +31,20 @@ class AutonomousTestRunner:
         started_at = datetime.now(timezone.utc)
         d8_assessment = None
 
+        # 1.5 Auto-provision venv if needed
+        venv_path = Path(request.repository_root) / ".venv"
+        if not venv_path.exists():
+            import sys
+            try:
+                subprocess.run(
+                    [sys.executable, "-m", "venv", str(venv_path)],
+                    check=True,
+                    capture_output=True
+                )
+            except subprocess.CalledProcessError as e:
+                # If venv creation fails, we can just proceed or log it. We'll proceed.
+                pass
+
         # 2. Define the executor
         def run_test_process():
             cmd = request.selected_command

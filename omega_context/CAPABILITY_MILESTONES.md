@@ -126,7 +126,7 @@ Validation: `tests/test_event_bus.py` (12 tests) + `tests/test_phase_a_integrati
 | D7 | LSP / linter diagnostics | pyright/ruff/mypy run headless; diagnostics parsed and published to `perception.dev.diagnostics`. | ✅ PASS — `tests/test_phase_d7_diagnostics.py` passes |
 | D8 | Bug prediction before execution | Pre-run hook on terminal/code_sandbox flags likely errors (undefined names, type errors, risky ops) BEFORE the code runs; demonstrated on seeded buggy code. | ✅ PASS — `tests/test_phase_d8_pre_run.py` passes |
 | D9 | Autonomous test execution | Detects pytest/unittest, runs them, parses results into a red/green map; auto-provisions a venv when needed. | ✅ PASS — `tests/test_phase_d9_autonomous_tests.py` passes |
-| D10 | Regression bisection | Given a newly-failing test, narrows to the responsible change/commit range automatically. |
+| D10 | Regression bisection | Given a newly-failing test, narrows to the responsible change/commit range automatically. | ✅ PASS — `tests/test_phase_d10_bisection.py` passes |
 | D11 | Refactoring engine (test-gated) | Performs a real AST transform (rename/extract/inline) via rope/libcst and only applies if tests stay green. |
 | D12 | Autonomous code suggestions | Generates context-grounded suggestions using the code-KG (not blind LLM); suggestion references real symbols. |
 | D13 | Coding-style model applied | Learns user conventions from the repo; generated code matches measured style (naming/format) checks. |
