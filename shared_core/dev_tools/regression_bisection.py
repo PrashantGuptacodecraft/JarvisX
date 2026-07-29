@@ -1,9 +1,13 @@
 import subprocess
 import os
 import re
+import uuid
 from pathlib import Path
 from dataclasses import dataclass
 from typing import List, Optional
+
+from .execution_gateway import ExecutionGateway
+from .pre_run_model import ExecutionRequest, ExecutionTarget, ExecutionKind
 
 @dataclass
 class BisectionRequest:
@@ -24,6 +28,9 @@ class BisectionResult:
     status: str
 
 class RegressionBisector:
+    def __init__(self, gateway: ExecutionGateway):
+        self.gateway = gateway
+
     def execute(self, request: BisectionRequest) -> BisectionResult:
         repo_dir = Path(request.repository_root).resolve()
         
@@ -46,19 +53,15 @@ class RegressionBisector:
             
             # 4. Run bisect
             cmd_str = " ".join(request.test_command)
-            # git bisect run can take a shell command
-            # Using a shell script is safer for git bisect run, but we can pass the command directly
             run_out = self._run_git(["bisect", "run"] + request.test_command, repo_dir)
             
             # 5. Parse result
             culprit = None
             message = None
             
-            # Format usually: "<commit_hash> is the first bad commit"
             m = re.search(r'([0-9a-f]{7,40}) is the first bad commit', run_out)
             if m:
                 culprit = m.group(1)
-                # Get commit message
                 message = self._run_git(["log", "-1", "--format=%B", culprit], repo_dir).strip()
                 
             # 6. Cleanup
@@ -73,7 +76,6 @@ class RegressionBisector:
             )
             
         except Exception as e:
-            # Try to abort in case of error
             try:
                 self._run_git(["bisect", "reset"], repo_dir)
             except:
@@ -81,7 +83,6 @@ class RegressionBisector:
             return BisectionResult(None, None, 0, str(e), "error")
             
     def _find_good_commit(self, repo_dir: Path, test_command: List[str], bad_commit: str, max_lookback: int) -> Optional[str]:
-        # Walk commits backwards
         commits_out = self._run_git(["log", f"--max-count={max_lookback}", "--format=%H", bad_commit], repo_dir)
         commits = commits_out.strip().split("\n")
         
@@ -89,26 +90,55 @@ class RegressionBisector:
             return None
             
         for i, commit in enumerate(commits):
-            # Skip the known bad commit if it's the first one
             if i == 0 and commit.startswith(self._run_git(["rev-parse", bad_commit], repo_dir).strip()):
                 continue
                 
-            # Checkout
             self._run_git(["checkout", commit], repo_dir)
             
-            # Test
-            try:
-                subprocess.run(test_command, cwd=str(repo_dir), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-                # Success!
+            # Run test through gateway
+            req = ExecutionRequest(
+                request_id=f"bisect_test_{uuid.uuid4().hex[:8]}",
+                execution_kind=ExecutionKind.TERMINAL.value,
+                target=ExecutionTarget(language=None, path=None, working_directory=str(repo_dir), inline_code_sha256=None),
+                argv=test_command,
+                raw_shell=False
+            )
+            
+            def run_test():
+                try:
+                    subprocess.run(test_command, cwd=str(repo_dir), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+                    return {"status": "success"}
+                except subprocess.CalledProcessError:
+                    return {"status": "failed"}
+                    
+            res = self.gateway.execute(req, run_test)
+            if isinstance(res, dict) and res.get("status") == "success":
                 self._run_git(["checkout", "-"], repo_dir)
                 return commit
-            except subprocess.CalledProcessError:
-                # Still failing
-                pass
                 
         self._run_git(["checkout", "-"], repo_dir)
         return None
         
     def _run_git(self, args: List[str], cwd: Path) -> str:
-        res = subprocess.run(["git"] + args, cwd=str(cwd), capture_output=True, text=True, check=True)
-        return res.stdout
+        req = ExecutionRequest(
+            request_id=f"bisect_git_{uuid.uuid4().hex[:8]}",
+            execution_kind=ExecutionKind.TERMINAL.value,
+            target=ExecutionTarget(language=None, path=None, working_directory=str(cwd), inline_code_sha256=None),
+            argv=["git"] + args,
+            raw_shell=False
+        )
+        
+        result_box = []
+        def run_cmd():
+            res = subprocess.run(["git"] + args, cwd=str(cwd), capture_output=True, text=True, check=True)
+            result_box.append(res.stdout)
+            return {"status": "success"}
+            
+        gw_res = self.gateway.execute(req, run_cmd)
+        if isinstance(gw_res, dict) and gw_res.get("status") == "blocked":
+            raise RuntimeError(f"Git execution blocked by D8 Pre-Run Assessment: {gw_res}")
+            
+        if not result_box:
+            raise RuntimeError(f"Git execution failed or did not return output.")
+            
+        return result_box[0]

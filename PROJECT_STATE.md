@@ -17,11 +17,11 @@ Authoritative tracker: `omega_context/CAPABILITY_MILESTONES.md` — **95 milesto
   - Locked (28): B1-B6, B9-B14, BL1-BL10, BC1-BC6.
   - Deferred (2, audited valid — `DEPENDENCY_AUDIT.md`): B7 (SUPPORTING), B8 (OPTIONAL).
 - **Phase C — Memory Engine + Knowledge Graph: COMPLETE 12/12 PASS/LOCKED** (C1–C12)
-- **Phase D — Developer Super-Intelligence:** IN PROGRESS (D1, D2, D3, D4, D5, D6, D7, D8, D9, D10 PASS/LOCKED)
+- **Phase D — Developer Super-Intelligence:** IN PROGRESS (D1, D2, D3, D4, D5, D6, D7, D8, D9, D10, D11 PASS/LOCKED)
 - Phases E, F: PENDING.
 
 ## Tests
-**274 passed, 0 failed.** Suites include Phase A, Phase B, Phase C, and Phase D suites (e.g. `test_phase_d10_bisection.py`).
+**276 passed, 0 failed.** Suites include Phase A, Phase B, Phase C, and Phase D suites (e.g. `test_phase_d11_refactoring.py`).
 
 ## Shipped infrastructure (all additive)
 - `shared_core/event_bus/` — thread-safe pub/sub, SYNC/ASYNC, backpressure, coalescing.

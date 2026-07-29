@@ -35,15 +35,26 @@ class AutonomousTestRunner:
         venv_path = Path(request.repository_root) / ".venv"
         if not venv_path.exists():
             import sys
-            try:
-                subprocess.run(
-                    [sys.executable, "-m", "venv", str(venv_path)],
-                    check=True,
-                    capture_output=True
-                )
-            except subprocess.CalledProcessError as e:
-                # If venv creation fails, we can just proceed or log it. We'll proceed.
-                pass
+            venv_req = ExecutionRequest(
+                request_id=f"{request.request_id}_venv",
+                execution_kind=ExecutionKind.TERMINAL.value,
+                target=ExecutionTarget(language=None, path=None, working_directory=request.repository_root, inline_code_sha256=None),
+                argv=[sys.executable, "-m", "venv", str(venv_path)],
+                raw_shell=False
+            )
+            def run_venv():
+                try:
+                    subprocess.run(
+                        [sys.executable, "-m", "venv", str(venv_path)],
+                        check=True,
+                        capture_output=True
+                    )
+                    return {"status": "success"}
+                except subprocess.CalledProcessError as e:
+                    return {"status": "error"}
+            
+            # Route venv creation through D8 Gateway
+            self.gateway.execute(venv_req, run_venv)
 
         # 2. Define the executor
         def run_test_process():

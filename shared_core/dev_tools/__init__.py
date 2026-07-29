@@ -38,6 +38,7 @@ from .test_execution_model import (
 from .test_framework_detection import TestFrameworkDetector
 from .autonomous_test_runner import AutonomousTestRunner
 from .regression_bisection import RegressionBisector, BisectionRequest, BisectionResult
+from .refactoring_engine import RefactoringEngine, RefactoringRequest, RefactoringResult
 
 __all__ = [
     "SymbolNode", "SymbolType", "SymbolLocation", "PythonASTParser", "TreeSitterParser", 
@@ -57,5 +58,6 @@ __all__ = [
     "PythonSyntaxPredictor", "D7DiagnosticsPredictor", "ExecutionGateway",
     "TestFramework", "TestExecutionStatus", "TestDetectionResult",
     "TestExecutionRequest", "TestExecutionResult", "TestFrameworkDetector", "AutonomousTestRunner",
-    "RegressionBisector", "BisectionRequest", "BisectionResult"
+    "RegressionBisector", "BisectionRequest", "BisectionResult",
+    "RefactoringEngine", "RefactoringRequest", "RefactoringResult"
 ]

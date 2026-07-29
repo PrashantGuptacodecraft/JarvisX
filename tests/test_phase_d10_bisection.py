@@ -42,10 +42,21 @@ def git_repo(tmp_path):
     
     return repo_dir, bad_commit_hash
 
+from shared_core.event_bus import EventBus
+from shared_core.dev_tools.diagnostics_evidence import DiagnosticsEvidenceStore
+from shared_core.dev_tools.execution_gateway import ExecutionGateway
+
+class MockEventBus(EventBus):
+    def publish(self, topic: str, data: dict): pass
+
 def test_bisector_finds_bad_commit(git_repo):
     repo_dir, bad_commit_hash = git_repo
     
-    bisector = RegressionBisector()
+    bus = MockEventBus()
+    store = DiagnosticsEvidenceStore(bus)
+    gw = ExecutionGateway(str(repo_dir), bus, store, [])
+    
+    bisector = RegressionBisector(gw)
     req = BisectionRequest(
         repository_root=str(repo_dir),
         test_command=["python", "-m", "pytest", "test_math.py"],
