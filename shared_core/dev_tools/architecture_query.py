@@ -1,6 +1,13 @@
 from typing import List
 from .architecture_model import ArchitectureSnapshot, DriftReport, DependencyEdge
 
+from .event_models import DevEventEnvelope
+from shared_core.event_bus.topics import PERCEPTION_DEV_ARCHITECTURE_DRIFT_DETECTED
+from shared_core.event_bus.bus import EventBus
+from typing import Optional
+import time
+import datetime
+
 class ArchitectureQuery:
     
     @staticmethod
@@ -27,7 +34,8 @@ class ArchitectureQuery:
         return "\n".join(lines)
 
     @staticmethod
-    def compare(old: ArchitectureSnapshot, new: ArchitectureSnapshot) -> DriftReport:
+    def compare(old: ArchitectureSnapshot, new: ArchitectureSnapshot, event_bus: Optional[EventBus] = None) -> DriftReport:
+        start_time = time.time()
         old_modules = set(old.modules.keys())
         new_modules = set(new.modules.keys())
         
@@ -56,7 +64,7 @@ class ArchitectureQuery:
         added_cycles = [list(c) for c in sorted(list(new_cycles - old_cycles))]
         removed_cycles = [list(c) for c in sorted(list(old_cycles - new_cycles))]
         
-        return DriftReport(
+        report = DriftReport(
             added_modules=added_modules,
             removed_modules=removed_modules,
             added_internal_edges=added_internal,
@@ -67,6 +75,29 @@ class ArchitectureQuery:
             added_cycles=added_cycles,
             removed_cycles=removed_cycles
         )
+        
+        if event_bus:
+            duration_ms = (time.time() - start_time) * 1000
+            env = DevEventEnvelope(
+                schema_version=1,
+                event_type=PERCEPTION_DEV_ARCHITECTURE_DRIFT_DETECTED,
+                event_id=f"evt_{int(time.time()*1000)}",
+                operation="architecture_drift_detection",
+                request_id=None,
+                repository_id=None,
+                occurred_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                duration_ms=duration_ms,
+                status="success",
+                summary={
+                    "added_modules": len(added_modules),
+                    "removed_modules": len(removed_modules),
+                    "added_cycles": len(added_cycles),
+                    "removed_cycles": len(removed_cycles)
+                }
+            )
+            event_bus.publish(PERCEPTION_DEV_ARCHITECTURE_DRIFT_DETECTED, env.to_dict())
+            
+        return report
 
     @staticmethod
     def narrate_drift(drift: DriftReport) -> str:

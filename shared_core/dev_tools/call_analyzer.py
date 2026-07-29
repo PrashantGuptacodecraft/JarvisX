@@ -1,21 +1,27 @@
 import ast
 from pathlib import Path
-from typing import List, Dict
+from typing import List, Dict, Optional
 import tree_sitter
 from collections import defaultdict
+import time
+import datetime
 
 from .call_model import CallNode, CodeRelationPredicate
 from .symbol_model import SymbolNode, SymbolType
 from .ast_parser import PythonASTParser
 from .tree_sitter_parser import TreeSitterParser
+from .event_models import DevEventEnvelope
+from shared_core.event_bus.topics import PERCEPTION_DEV_CALL_GRAPH_GENERATED
+from shared_core.event_bus.bus import EventBus
 
 class CallAnalyzer:
-    def __init__(self, root_dir: Path):
+    def __init__(self, root_dir: Path, event_bus: Optional[EventBus] = None):
         self.root_dir = root_dir.resolve()
         self.ts_parser = TreeSitterParser(self.root_dir)
         self.py_parser = PythonASTParser(self.root_dir)
         self.symbols_by_name = defaultdict(list)
         self.symbols_by_qname = {}
+        self.event_bus = event_bus
         
     def _build_symbol_index(self):
         symbols = []
@@ -28,11 +34,29 @@ class CallAnalyzer:
                 self.symbols_by_qname[sym.qualified_name] = sym
                 
     def analyze(self) -> List[CallNode]:
+        start_time = time.time()
         self._build_symbol_index()
         calls = []
         calls.extend(self._analyze_python_calls())
         calls.extend(self._analyze_ts_calls())
         calls.extend(self._analyze_java_calls())
+        
+        if self.event_bus:
+            duration_ms = (time.time() - start_time) * 1000
+            env = DevEventEnvelope(
+                schema_version=1,
+                event_type=PERCEPTION_DEV_CALL_GRAPH_GENERATED,
+                event_id=f"evt_{int(time.time()*1000)}",
+                operation="call_analysis",
+                request_id=None,
+                repository_id=None,
+                occurred_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                duration_ms=duration_ms,
+                status="success",
+                summary={"calls_count": len(calls)}
+            )
+            self.event_bus.publish(PERCEPTION_DEV_CALL_GRAPH_GENERATED, env.to_dict())
+            
         return calls
 
     def _resolve_call(self, func_name: str, caller_qname: str, lang: str, line: int, col: int, calls: List[CallNode]):

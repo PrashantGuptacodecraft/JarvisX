@@ -16,9 +16,10 @@ Authoritative tracker: `omega_context/CAPABILITY_MILESTONES.md` — **95 milesto
 - **Phase B — State Manager + World-State: COMPLETE 30/30.**
   - Locked (28): B1-B6, B9-B14, BL1-BL10, BC1-BC6.
   - Deferred (2, audited valid — `DEPENDENCY_AUDIT.md`): B7 (SUPPORTING), B8 (OPTIONAL).
-- **Phase C — Memory Engine + Knowledge Graph: COMPLETE 12/12 PASS/LOCKED** (C1–C12)
-- **Phase D — Developer Super-Intelligence:** IN PROGRESS (D1, D2, D3, D4, D5, D6, D7, D8, D9, D10, D11, D12, D13 PASS/LOCKED)
-- Phases E, F: PENDING.
+- **Phase C**: 12/12 COMPLETE/LOCKED
+- **Phase D (D1–D14)**: PASS/LOCKED
+- **Regression Baseline**: 280 passed, 0 failed
+- **Next Milestone**: D15 — Tests passing
 
 ## Tests
 **280 passed, 0 failed.** Suites include Phase A, Phase B, Phase C, and Phase D suites (e.g. `test_phase_d13_coding_style.py`).

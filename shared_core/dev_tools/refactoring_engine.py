@@ -10,6 +10,11 @@ import difflib
 from .execution_gateway import ExecutionGateway
 from .autonomous_test_runner import AutonomousTestRunner
 from .test_execution_model import TestExecutionRequest, TestFramework, TestExecutionStatus
+from .event_models import DevEventEnvelope
+from shared_core.event_bus.topics import PERCEPTION_DEV_REFACTORING_EVALUATED
+from shared_core.event_bus.bus import EventBus
+import time
+import datetime
 
 class RefactoringOperation(str, Enum):
     RENAME = "rename"
@@ -34,11 +39,13 @@ class RefactoringResult:
     diff: str
 
 class RefactoringEngine:
-    def __init__(self, gateway: ExecutionGateway, test_runner: AutonomousTestRunner):
+    def __init__(self, gateway: ExecutionGateway, test_runner: AutonomousTestRunner, event_bus: Optional[EventBus] = None):
         self.gateway = gateway
         self.test_runner = test_runner
+        self.event_bus = event_bus
 
     def execute(self, request: RefactoringRequest) -> RefactoringResult:
+        start_time = time.time()
         repo_root = Path(request.repository_root).resolve()
         target_path = repo_root / request.target_file
         
@@ -108,8 +115,30 @@ class RefactoringEngine:
                 
         # 3. Rollback or Commit
         if tests_passed:
-            return RefactoringResult(True, "Tests passed. Refactoring applied.", diff)
+            result = RefactoringResult(True, "Tests passed. Refactoring applied.", diff)
         else:
             # Rollback
             target_path.write_text(original_content, encoding="utf-8")
-            return RefactoringResult(False, "Tests failed. Refactoring rolled back.", diff)
+            result = RefactoringResult(False, "Tests failed. Refactoring rolled back.", diff)
+            
+        if self.event_bus:
+            duration_ms = (time.time() - start_time) * 1000
+            env = DevEventEnvelope(
+                schema_version=1,
+                event_type=PERCEPTION_DEV_REFACTORING_EVALUATED,
+                event_id=f"evt_{int(time.time()*1000)}",
+                operation="refactoring_evaluation",
+                request_id=None,
+                repository_id=None,
+                occurred_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                duration_ms=duration_ms,
+                status="success" if result.success else "rolled_back",
+                summary={
+                    "operation": request.operation.value,
+                    "target_symbol": request.target_symbol,
+                    "tests_passed": tests_passed
+                }
+            )
+            self.event_bus.publish(PERCEPTION_DEV_REFACTORING_EVALUATED, env.to_dict())
+            
+        return result

@@ -10,10 +10,17 @@ from .dependency_model import DependencyNode, DependencyType
 from .symbol_model import SymbolLocation
 from .tree_sitter_parser import TreeSitterParser
 
+from .event_models import DevEventEnvelope
+from shared_core.event_bus.topics import PERCEPTION_DEV_DEPENDENCY_GRAPH_GENERATED
+import time
+import datetime
+from shared_core.event_bus.bus import EventBus
+
 class DependencyAnalyzer:
-    def __init__(self, root_dir: Path):
+    def __init__(self, root_dir: Path, event_bus: Optional[EventBus] = None):
         self.root_dir = root_dir.resolve()
         self.ts_parser = TreeSitterParser(self.root_dir)
+        self.event_bus = event_bus
         
     def _normalize_path(self, path: Path) -> str:
         try:
@@ -22,10 +29,28 @@ class DependencyAnalyzer:
             return str(path.as_posix())
 
     def analyze(self) -> List[DependencyNode]:
+        start_time = time.time()
         deps = []
         deps.extend(self._analyze_python_deps())
         deps.extend(self._analyze_ts_deps())
         deps.extend(self._analyze_java_deps())
+        
+        if self.event_bus:
+            duration_ms = (time.time() - start_time) * 1000
+            env = DevEventEnvelope(
+                schema_version=1,
+                event_type=PERCEPTION_DEV_DEPENDENCY_GRAPH_GENERATED,
+                event_id=f"evt_{int(time.time()*1000)}",
+                operation="dependency_analysis",
+                request_id=None,
+                repository_id=None,
+                occurred_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                duration_ms=duration_ms,
+                status="success",
+                summary={"nodes_count": len(deps)}
+            )
+            self.event_bus.publish(PERCEPTION_DEV_DEPENDENCY_GRAPH_GENERATED, env.to_dict())
+            
         return deps
         
     def store_in_kg(self, memory_manager, deps: List[DependencyNode]):

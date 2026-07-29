@@ -8,6 +8,11 @@ from typing import List, Optional
 
 from .execution_gateway import ExecutionGateway
 from .pre_run_model import ExecutionRequest, ExecutionTarget, ExecutionKind
+from .event_models import DevEventEnvelope
+from shared_core.event_bus.topics import PERCEPTION_DEV_BISECTION_COMPLETED
+from shared_core.event_bus.bus import EventBus
+import time
+import datetime
 
 @dataclass
 class BisectionRequest:
@@ -28,10 +33,12 @@ class BisectionResult:
     status: str
 
 class RegressionBisector:
-    def __init__(self, gateway: ExecutionGateway):
+    def __init__(self, gateway: ExecutionGateway, event_bus: Optional[EventBus] = None):
         self.gateway = gateway
+        self.event_bus = event_bus
 
     def execute(self, request: BisectionRequest) -> BisectionResult:
+        start_time = time.time()
         repo_dir = Path(request.repository_root).resolve()
         
         # 1. Ensure clean working directory
@@ -67,13 +74,34 @@ class RegressionBisector:
             # 6. Cleanup
             self._run_git(["bisect", "reset"], repo_dir)
             
-            return BisectionResult(
+            result = BisectionResult(
                 culprit_commit=culprit,
                 commit_message=message,
                 steps_taken=run_out.count("Bisecting:"),
                 log=run_out,
                 status="success" if culprit else "failed_to_isolate"
             )
+            
+            if self.event_bus:
+                duration_ms = (time.time() - start_time) * 1000
+                env = DevEventEnvelope(
+                    schema_version=1,
+                    event_type=PERCEPTION_DEV_BISECTION_COMPLETED,
+                    event_id=f"evt_{int(time.time()*1000)}",
+                    operation="regression_bisection",
+                    request_id=None,
+                    repository_id=None,
+                    occurred_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    duration_ms=duration_ms,
+                    status=result.status,
+                    summary={
+                        "steps_taken": result.steps_taken,
+                        "culprit_found": culprit is not None
+                    }
+                )
+                self.event_bus.publish(PERCEPTION_DEV_BISECTION_COMPLETED, env.to_dict())
+                
+            return result
             
         except Exception as e:
             try:

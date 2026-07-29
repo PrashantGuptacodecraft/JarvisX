@@ -3,14 +3,19 @@ import time
 import re
 from pathlib import Path
 from datetime import datetime, timezone
+from typing import Optional
 
 from .execution_gateway import ExecutionGateway
 from .pre_run_model import ExecutionRequest, ExecutionTarget, ExecutionKind
 from .test_execution_model import TestExecutionRequest, TestExecutionResult, TestExecutionStatus, TestFramework
+from .event_models import DevEventEnvelope
+from shared_core.event_bus.topics import PERCEPTION_DEV_TESTS_COMPLETED
+from shared_core.event_bus.bus import EventBus
 
 class AutonomousTestRunner:
-    def __init__(self, gateway: ExecutionGateway):
+    def __init__(self, gateway: ExecutionGateway, event_bus: Optional[EventBus] = None):
         self.gateway = gateway
+        self.event_bus = event_bus
         self.MAX_LOG_SIZE = 500 * 1024 # 500 KB limit
 
     def execute(self, request: TestExecutionRequest) -> TestExecutionResult:
@@ -177,7 +182,7 @@ class AutonomousTestRunner:
             else:
                 passed = max(0, total - failed - errors - skipped)
 
-        return TestExecutionResult(
+        result = TestExecutionResult(
             request_id=request.request_id,
             execution_status=status,
             exit_code=gw_result["exit_code"],
@@ -194,3 +199,25 @@ class AutonomousTestRunner:
             diagnostics=[],
             d8_assessment=None # If we need to capture this, we'd have to snoop the bus or modify gateway to return it
         )
+        
+        if self.event_bus:
+            env = DevEventEnvelope(
+                schema_version=1,
+                event_type=PERCEPTION_DEV_TESTS_COMPLETED,
+                event_id=f"evt_{int(time.time()*1000)}",
+                operation="test_execution",
+                request_id=request.request_id,
+                repository_id=None,
+                occurred_at=datetime.now(timezone.utc).isoformat(),
+                duration_ms=duration_ms,
+                status=status,
+                summary={
+                    "passed": passed,
+                    "failed": failed,
+                    "skipped": skipped,
+                    "errors": errors
+                }
+            )
+            self.event_bus.publish(PERCEPTION_DEV_TESTS_COMPLETED, env.to_dict())
+            
+        return result

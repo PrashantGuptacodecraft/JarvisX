@@ -7,10 +7,18 @@ from .architecture_model import (
 from .dependency_analyzer import DependencyAnalyzer
 from .dependency_model import DependencyType
 
+from .event_models import DevEventEnvelope
+from shared_core.event_bus.topics import PERCEPTION_DEV_ARCHITECTURE_SNAPSHOT_GENERATED
+from shared_core.event_bus.bus import EventBus
+from typing import List, Dict, Set, Optional
+import time
+import datetime
+
 class ArchitectureAnalyzer:
-    def __init__(self, root_dir: Path):
+    def __init__(self, root_dir: Path, event_bus: Optional[EventBus] = None):
         self.root_dir = root_dir.resolve()
-        self.dep_analyzer = DependencyAnalyzer(self.root_dir)
+        self.dep_analyzer = DependencyAnalyzer(self.root_dir, event_bus=event_bus)
+        self.event_bus = event_bus
 
     def _normalize_path(self, path: Path) -> str:
         try:
@@ -57,6 +65,7 @@ class ArchitectureAnalyzer:
         return target.strip('"\'')
 
     def analyze(self, config: ArchitectureConfig = None) -> ArchitectureSnapshot:
+        start_time = time.time()
         if config is None:
             config = ArchitectureConfig()
             
@@ -92,13 +101,35 @@ class ArchitectureAnalyzer:
         
         cycles = self._find_cycles(internal_edges_list)
         
-        return ArchitectureSnapshot(
+        snapshot = ArchitectureSnapshot(
             modules=modules,
             internal_edges=internal_edges_list,
             external_edges=external_edges_list,
             cycles=cycles,
             explicit_violations=[] # To be implemented if config has allowed_dependencies
         )
+        
+        if self.event_bus:
+            duration_ms = (time.time() - start_time) * 1000
+            env = DevEventEnvelope(
+                schema_version=1,
+                event_type=PERCEPTION_DEV_ARCHITECTURE_SNAPSHOT_GENERATED,
+                event_id=f"evt_{int(time.time()*1000)}",
+                operation="architecture_analysis",
+                request_id=None,
+                repository_id=None,
+                occurred_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                duration_ms=duration_ms,
+                status="success",
+                summary={
+                    "modules_count": len(modules),
+                    "internal_edges_count": len(internal_edges_list),
+                    "cycles_count": len(cycles)
+                }
+            )
+            self.event_bus.publish(PERCEPTION_DEV_ARCHITECTURE_SNAPSHOT_GENERATED, env.to_dict())
+            
+        return snapshot
 
     def _find_cycles(self, internal_edges: List[DependencyEdge]) -> List[List[str]]:
         from collections import defaultdict
