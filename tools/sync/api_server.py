@@ -68,8 +68,6 @@ class CrossDeviceServer:
         log.info(f"CrossDeviceServer started on port {self.port}.")
         return f"Cross-device API running on http://0.0.0.0:{self.port}"
 
-    def stop(self):
-        self._running = False
 
     def push_notification(self, title: str, message: str):
         """Add a notification for cross-device delivery."""
@@ -145,13 +143,25 @@ class CrossDeviceServer:
 
     def _serve(self):
         import uvicorn
+        from uvicorn.config import Config
+        from uvicorn.server import Server
+        
         try:
-            uvicorn.run(
-                self._app,
+            config = Config(
+                app=self._app,
                 host="0.0.0.0",
                 port=self.port,
                 log_level="error",
                 access_log=False,
             )
+            self._server = Server(config=config)
+            self._server.run()
         except Exception as e:
             log.error(f"CrossDeviceServer error: {e}")
+
+    def stop(self):
+        self._running = False
+        if hasattr(self, "_server") and self._server:
+            self._server.should_exit = True
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=1.0)

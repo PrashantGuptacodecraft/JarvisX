@@ -48,7 +48,7 @@ def ensure_env_file():
         log.info("Created .env from .env.example")
 
 
-def build_jarvis(gui=None, command_queue=None):
+def build_jarvis(gui=None, command_queue=None, headless=False):
     if command_queue is None:
         command_queue = queue.Queue()
 
@@ -364,14 +364,17 @@ def build_jarvis(gui=None, command_queue=None):
         log.warning(f"PrivateMode: {e}")
 
     # Cross-Device REST API
-    try:
-        from tools.sync.api_server import CrossDeviceServer
-        sync_srv = CrossDeviceServer(command_queue=command_queue)
-        sync_srv.start()
-        tools["sync_server"] = sync_srv
-        log.info("CrossDeviceServer started on :7777")
-    except Exception as e:
-        log.warning(f"CrossDeviceServer: {e}")
+    if not headless:
+        try:
+            from tools.sync.api_server import CrossDeviceServer
+            sync_srv = CrossDeviceServer(command_queue=command_queue)
+            sync_srv.start()
+            tools["sync_server"] = sync_srv
+            log.info("CrossDeviceServer started on :7777")
+        except Exception as e:
+            log.warning(f"CrossDeviceServer: {e}")
+    else:
+        log.info("Headless mode: skipping CrossDeviceServer (API port not bound)")
 
     # Code Intelligence (proactive watchdog code review)
     try:
@@ -589,7 +592,7 @@ def run_gui():
 
 def run_headless():
     cq = queue.Queue()
-    core, listener, speaker, memory, _, gesture_ctrl = build_jarvis(gui=None, command_queue=cq)
+    core, listener, speaker, memory, _, gesture_ctrl = build_jarvis(gui=None, command_queue=cq, headless=True)
     listener.start()
     core.start()
 

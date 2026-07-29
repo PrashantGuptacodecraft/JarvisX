@@ -17,12 +17,12 @@ Authoritative tracker: `omega_context/CAPABILITY_MILESTONES.md` — **95 milesto
   - Locked (28): B1-B6, B9-B14, BL1-BL10, BC1-BC6.
   - Deferred (2, audited valid — `DEPENDENCY_AUDIT.md`): B7 (SUPPORTING), B8 (OPTIONAL).
 - **Phase C**: 12/12 COMPLETE/LOCKED
-- **Phase D (D1–D14)**: PASS/LOCKED
-- **Regression Baseline**: 280 passed, 0 failed
-- **Next Milestone**: D15 — Tests passing
+- **Phase D (D1–D16)**: 16/16 COMPLETE/LOCKED
+- **Regression Baseline**: 291 passed, 0 failed
+- **Next Milestone**: Phase E (E1 — Tool execution sandbox)
 
 ## Tests
-**280 passed, 0 failed.** Suites include Phase A, Phase B, Phase C, and Phase D suites (e.g. `test_phase_d13_coding_style.py`).
+**291 passed, 0 failed.** Suites include Phase A, Phase B, Phase C, and Phase D suites (e.g. `test_phase_d16_legacy_boot.py`).
 
 ## Shipped infrastructure (all additive)
 - `shared_core/event_bus/` — thread-safe pub/sub, SYNC/ASYNC, backpressure, coalescing.
