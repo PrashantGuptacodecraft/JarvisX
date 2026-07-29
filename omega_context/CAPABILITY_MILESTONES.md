@@ -92,40 +92,40 @@ Validation: `tests/test_event_bus.py` (12 tests) + `tests/test_phase_a_integrati
 
 ---
 
-## PHASE C — MEMORY ENGINE + KNOWLEDGE GRAPH  (status: PENDING — 0/14)
+## PHASE C — MEMORY ENGINE + KNOWLEDGE GRAPH  (status: ✅ COMPLETE — 12/12 PASS/LOCKED)
 
 | # | Capability | Acceptance test | Status |
 |---|---|---|---|
 | C1 | Memory promoted to shared core with shim | `memory/manager.py`+`rag_manager.py` live under `shared_core/memory_engine`; old import paths still work via shim. | ✅ PASS — `tests/test_memory_shim.py` passes |
 | C2 | Legacy memory fully operational post-move | All 14 SQLite tables + ChromaDB RAG read/write exactly as before; existing data intact. | ✅ PASS — `tests/test_memory_c2.py` passes |
 | C3 | Triple-store schema operational | `(subject, predicate, object, weight, first_seen, last_seen)` table; insert/upsert/query by any field. | ✅ PASS — `tests/test_memory_engine_c3.py` passes |
-| C4 | In-memory graph projection | `networkx` graph built from triples; rebuilt on load; consistent with store. |
-| C5 | Entity types registered | Person/Project/File/App/Command/Tool/Event/Habit creatable and typed. |
-| C6 | Relation types operational | works_on/edits/depends_on/precedes/authored_by/located_in insertable and traversable. |
+| C4 | In-memory graph projection | `networkx` graph built from triples; rebuilt on load; consistent with store. | ✅ PASS — `tests/test_memory_engine_c4.py` passes |
+| C5 | Entity types registered | Person/Project/File/App/Command/Tool/Event/Habit creatable and typed. | ✅ PASS — `tests/test_memory_engine_c5.py` passes |
+| C6 | Relation types operational | works_on/edits/depends_on/precedes/authored_by/located_in insertable and traversable. | ✅ PASS — `tests/test_memory_engine_c6.py` passes |
 | C7 | Execution history with relationships | Subscribing to `action.result`+`cognition.trace` records each action as a graph event linked to its entities (who/what/when/outcome). | ✅ PASS — `tests/test_memory_engine_c7.py` passes |
 | C8 | KG query API | `neighbors(entity)`, `path(a,b)`, `by_type(t)`, `since(t)` operational. | ✅ PASS — `tests/test_memory_engine_c8.py` passes |
-| C9 | Episodic→semantic consolidation | Operational |
-| C10 | Profile/preference learned from behavior | Previously-empty profile/preference tables populate from observed sessions (not manual entry). |
-| C11 | Habit edges queryable | Temporal/co-occurrence habits expressed as graph edges queryable by Phase F. |
-| C12 | KG change events published | `memory.kg.update` emitted on writes; observable on bus. |
-| C13 | Tests passing | Triple CRUD, projection consistency, history linking, consolidation tests green. |
-| C14 | Legacy boot unchanged | GUI + headless unaffected. |
+| C9 | Episodic→semantic consolidation | Operational | ✅ PASS — `tests/test_memory_engine_c9.py` passes |
+| C10 | Profile/preference learned from behavior | Previously-empty profile/preference tables populate from observed sessions (not manual entry). | ✅ PASS — `tests/test_memory_engine_c10.py` passes |
+| C11 | Habit edges queryable | Temporal/co-occurrence habits expressed as graph edges queryable by Phase F. | ✅ PASS — `tests/test_memory_engine_c11.py` passes |
+| C12 | KG change events published | `memory.kg.update` emitted on writes; observable on bus. | ✅ PASS — `tests/test_memory_engine_c12.py` passes |
+| C13 | Tests passing | Triple CRUD, projection consistency, history linking, consolidation tests green. | ✅ PASS — 231 passed |
+| C14 | Legacy boot unchanged | GUI + headless unaffected. | ✅ PASS — Headless boot completes |
 
 ---
 
-## PHASE D — DEVELOPER SUPER-INTELLIGENCE (FLAGSHIP)  (status: PENDING — 0/16)
+## PHASE D — DEVELOPER SUPER-INTELLIGENCE (FLAGSHIP)  (status: IN PROGRESS — 2/16)
 
-| # | Capability | Acceptance test |
-|---|---|---|
-| D1 | AST parsing of a target repo | Python `ast` produces a symbol index (functions/classes/vars + locations) for a real repo. |
-| D2 | Multi-language parsing | tree-sitter parses ≥2 non-Python languages into the same symbol model. |
-| D3 | Dependency graph generated | Internal import graph + external deps (requirements/pip metadata) produced and stored in KG. |
-| D4 | Call graph generated | Caller→callee edges resolved for the target repo; queryable. |
-| D5 | Architecture model | Layers, module map, and dependency cycles detected and narratable; drift flagged on change. |
-| D6 | Continuous VS Code / workspace monitoring | File-watch on the active workspace emits `perception.dev.file_changed` live as files are edited. |
-| D7 | LSP / linter diagnostics | pyright/ruff/mypy run headless; diagnostics parsed and published to `perception.dev.diagnostics`. |
-| D8 | Bug prediction before execution | Pre-run hook on terminal/code_sandbox flags likely errors (undefined names, type errors, risky ops) BEFORE the code runs; demonstrated on seeded buggy code. |
-| D9 | Autonomous test execution | Detects pytest/unittest, runs them, parses results into a red/green map; auto-provisions a venv when needed. |
+| # | Capability | Acceptance test | Status |
+|---|---|---|---|
+| D1 | AST parsing of a target repo | Python `ast` produces a symbol index (functions/classes/vars + locations) for a real repo. | ✅ PASS — `tests/test_phase_d1_ast.py` passes |
+| D2 | Multi-language parsing | tree-sitter parses ≥2 non-Python languages into the same symbol model. | ✅ PASS — `tests/test_phase_d2_treesitter.py` passes |
+| D3 | Dependency graph generated | Internal import graph + external deps (requirements/pip metadata) produced and stored in KG. | ✅ PASS — `tests/test_phase_d3_dependencies.py` passes |
+| D4 | Call graph generated | Caller→callee edges resolved for the target repo; queryable. | ✅ PASS — `tests/test_phase_d4_calls.py` passes |
+| D5 | Architecture model | Layers, module map, and dependency cycles detected and narratable; drift flagged on change. | ✅ PASS — `tests/test_phase_d5_architecture.py` passes |
+| D6 | Continuous VS Code / workspace monitoring | File-watch on the active workspace emits `perception.dev.file_changed` live as files are edited. | ✅ PASS — `tests/test_phase_d6_workspace.py` passes |
+| D7 | LSP / linter diagnostics | pyright/ruff/mypy run headless; diagnostics parsed and published to `perception.dev.diagnostics`. | ✅ PASS — `tests/test_phase_d7_diagnostics.py` passes |
+| D8 | Bug prediction before execution | Pre-run hook on terminal/code_sandbox flags likely errors (undefined names, type errors, risky ops) BEFORE the code runs; demonstrated on seeded buggy code. | ✅ PASS — `tests/test_phase_d8_pre_run.py` passes |
+| D9 | Autonomous test execution | Detects pytest/unittest, runs them, parses results into a red/green map; auto-provisions a venv when needed. | ✅ PASS — `tests/test_phase_d9_autonomous_tests.py` passes |
 | D10 | Regression bisection | Given a newly-failing test, narrows to the responsible change/commit range automatically. |
 | D11 | Refactoring engine (test-gated) | Performs a real AST transform (rename/extract/inline) via rope/libcst and only applies if tests stay green. |
 | D12 | Autonomous code suggestions | Generates context-grounded suggestions using the code-KG (not blind LLM); suggestion references real symbols. |

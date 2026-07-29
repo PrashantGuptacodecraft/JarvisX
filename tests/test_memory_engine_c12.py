@@ -12,7 +12,8 @@ def test_setup(tmp_path, monkeypatch):
     monkeypatch.setattr(shared_core.memory_engine.manager, 'DB_PATH', tmp_path / "jarvis_c12.db")
     monkeypatch.setattr(shared_core.memory_engine.manager, 'FALLBACK_DB_PATH', tmp_path / "fallback.db")
     
-    memory = MemoryManager()
+    bus = get_bus()
+    memory = MemoryManager(event_bus=bus)
     return memory
 
 def test_c12_kg_change_events_published(test_setup):
@@ -38,11 +39,17 @@ def test_c12_kg_change_events_published(test_setup):
         
         last_event = received_events[-1]
         assert last_event.topic == MEMORY_KG_UPDATE
-        assert last_event.payload["subject"] == "SubjectA"
-        assert last_event.payload["predicate"] == "works_on"
-        assert last_event.payload["object"] == "ProjectB"
         assert last_event.payload["action"] == "upsert"
-        assert "triple_id" in last_event.payload
+        assert "revision" in last_event.payload
+        assert "timestamp" in last_event.payload
+        assert "triples" in last_event.payload
+        assert len(last_event.payload["triples"]) == 1
+        
+        triple = last_event.payload["triples"][0]
+        assert triple["subject"] == "SubjectA"
+        assert triple["predicate"] == "works_on"
+        assert triple["object"] == "ProjectB"
+        assert "triple_id" in triple
         
         # Test promote_semantic_pattern
         received_events.clear()
@@ -61,15 +68,40 @@ def test_c12_kg_change_events_published(test_setup):
         
         time.sleep(0.1)
         
-        assert len(received_events) > 0
+        assert len(received_events) == 1
         
         # Verify that we got events for the pattern edges
         found_actor_edge = False
-        for ev in received_events:
-            if ev.payload["predicate"] == "has_recurring_pattern":
+        for t in received_events[0].payload["triples"]:
+            if t["predicate"] == "has_recurring_pattern":
                 found_actor_edge = True
                 
         assert found_actor_edge, "Expected an event for has_recurring_pattern"
+        
+        # Test record_execution_event
+        received_events.clear()
+        
+        success = memory.record_execution_event(
+            event_id="test:exec_event_abc",
+            actor="User",
+            action="dash",
+            outcome="success",
+            targets=["wall"],
+            timestamp="2026-07-28T00:00:00Z"
+        )
+        assert success is True
+        
+        time.sleep(0.1)
+        
+        assert len(received_events) == 1
+        assert len(received_events[0].payload["triples"]) >= 5
+        
+        found_action_edge = False
+        for t in received_events[0].payload["triples"]:
+            if t["predicate"] == "action":
+                found_action_edge = True
+                
+        assert found_action_edge, "Expected an event for execution action"
         
     finally:
         bus.unsubscribe(subscription)

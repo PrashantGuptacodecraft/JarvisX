@@ -16,11 +16,12 @@ Authoritative tracker: `omega_context/CAPABILITY_MILESTONES.md` — **95 milesto
 - **Phase B — State Manager + World-State: COMPLETE 30/30.**
   - Locked (28): B1-B6, B9-B14, BL1-BL10, BC1-BC6.
   - Deferred (2, audited valid — `DEPENDENCY_AUDIT.md`): B7 (SUPPORTING), B8 (OPTIONAL).
-- **Phase C — Memory Engine + Knowledge Graph: IN PROGRESS (C1–C8 COMPLETE/LOCKED)**
-- Phases D, E, F: PENDING.
+- **Phase C — Memory Engine + Knowledge Graph: COMPLETE 12/12 PASS/LOCKED** (C1–C12)
+- **Phase D — Developer Super-Intelligence:** IN PROGRESS (D1, D2, D3, D4, D5, D6, D7, D8, D9 PASS/LOCKED)
+- Phases E, F: PENDING.
 
 ## Tests
-**217 passed, 0 failed.** Suites include Phase A, Phase B, and Phase C suites (e.g. `test_memory_engine_c8.py`).
+**273 passed, 0 failed.** Suites include Phase A, Phase B, Phase C, and Phase D suites (e.g. `test_phase_d9_autonomous_tests.py`).
 
 ## Shipped infrastructure (all additive)
 - `shared_core/event_bus/` — thread-safe pub/sub, SYNC/ASYNC, backpressure, coalescing.
@@ -31,9 +32,10 @@ Authoritative tracker: `omega_context/CAPABILITY_MILESTONES.md` — **95 milesto
   recovery + schema versioning, `diagnostics()`).
 - `shared_core/telemetry/` — continuous CPU/RAM/Disk/GPU collectors + watchdog filesystem watcher,
   run as Scheduler tasks; publishes `perception.system.*` + `perception.filesystem.change`.
+- `shared_core/memory_engine/` — Phase C knowledge graph, execution history, episodic-to-semantic habit consolidation, preference learning, batched EventBus updates. 
 - `main.py` — additive wiring: bus + event_logger, StateManager + History Ledger, central Scheduler
   (OS sampler migrated onto it, legacy fallback), TelemetryEngine, ContinuityManager (world_state +
   brain + scheduler providers; restore-on-boot + autosave + atexit). Legacy boot unchanged.
 
 ## Next action
-Begin Phase C (`shared_core/memory/`). Stop after each checkpoint.
+Begin Phase D. Stop after each checkpoint.

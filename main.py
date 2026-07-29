@@ -149,7 +149,7 @@ def build_jarvis(gui=None, command_queue=None):
             log.warning(f"TelemetryEngine not started: {e}")
 
     speaker = Speaker()
-    memory = MemoryManager()
+    memory = MemoryManager(event_bus=bus)
     
     # ── Phase C7: Execution History Recorder ──
     execution_recorder = ExecutionRecorder(memory_manager=memory, event_bus=bus)

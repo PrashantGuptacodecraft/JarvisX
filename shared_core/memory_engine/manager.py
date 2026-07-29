@@ -27,9 +27,12 @@ STOP_WORDS = {
     "what", "when", "where", "who", "why", "with", "you", "your",
 }
 
+from shared_core.event_bus import EventBus
+from shared_core.event_bus.topics import MEMORY_KG_UPDATE
 
 class MemoryManager:
-    def __init__(self):
+    def __init__(self, event_bus: EventBus | None = None):
+        self.event_bus = event_bus
         self._lock = threading.Lock()
         self._kg_revision = 0
         self.kg_projection = GraphProjection(max_edges=10000)
@@ -1374,16 +1377,18 @@ class MemoryManager:
                         last_seen=updated_row[5],
                         new_revision=new_revision
                     )
-                    
-                    from shared_core import publish_safe
-                    from shared_core.event_bus.topics import MEMORY_KG_UPDATE
-                    publish_safe(MEMORY_KG_UPDATE, {
-                        "action": "upsert",
-                        "subject": updated_row[0],
-                        "predicate": updated_row[1],
-                        "object": updated_row[2],
-                        "triple_id": triple_id
-                    }, source="memory_engine")
+                    if self.event_bus:
+                        self.event_bus.publish(MEMORY_KG_UPDATE, {
+                            "action": "upsert",
+                            "revision": new_revision,
+                            "timestamp": now,
+                            "triples": [{
+                                "triple_id": triple_id,
+                                "subject": updated_row[0],
+                                "predicate": updated_row[1],
+                                "object": updated_row[2]
+                            }]
+                        }, source="memory_engine")
                 else:
                     self.kg_projection.mark_stale(new_revision)
                 return triple_id
@@ -1477,6 +1482,7 @@ class MemoryManager:
                 return False
                 
         # Outside the lock
+        synced_triples = []
         for row in rows:
             try:
                 self.kg_projection.sync_edge(
@@ -1489,18 +1495,23 @@ class MemoryManager:
                     last_seen=row[5],
                     new_revision=new_revision
                 )
-                
-                from shared_core import publish_safe
-                from shared_core.event_bus.topics import MEMORY_KG_UPDATE
-                publish_safe(MEMORY_KG_UPDATE, {
-                    "action": "upsert",
+                synced_triples.append({
+                    "triple_id": row[6],
                     "subject": row[0],
                     "predicate": row[1],
-                    "object": row[2],
-                    "triple_id": row[6]
-                }, source="memory_engine")
+                    "object": row[2]
+                })
             except Exception:
                 self.kg_projection.mark_stale(new_revision)
+                
+        if self.event_bus and synced_triples:
+            self.event_bus.publish(MEMORY_KG_UPDATE, {
+                "action": "upsert",
+                "revision": new_revision,
+                "timestamp": now,
+                "triples": synced_triples
+            }, source="memory_engine")
+            
         return True
 
     def register_entity(self, name: str, entity_type: EntityType, weight: float = 1.0) -> int:
@@ -1613,6 +1624,7 @@ class MemoryManager:
                         sync_data.append((tid, *row))
 
         # Synchronize outside lock
+        synced_triples = []
         for data in sync_data:
             tid, subj, pred, obj, weight, f_seen, l_seen = data
             if not self.kg_projection.sync_edge(
@@ -1620,5 +1632,20 @@ class MemoryManager:
                 weight=weight, first_seen=f_seen, last_seen=l_seen, new_revision=new_revision
             ):
                 self.kg_projection.mark_stale(new_revision)
+            else:
+                synced_triples.append({
+                    "triple_id": tid,
+                    "subject": subj,
+                    "predicate": pred,
+                    "object": obj
+                })
                 
+        if self.event_bus and synced_triples:
+            self.event_bus.publish(MEMORY_KG_UPDATE, {
+                "action": "upsert",
+                "revision": new_revision,
+                "timestamp": timestamp,
+                "triples": synced_triples
+            }, source="memory_engine")
+            
         return True
