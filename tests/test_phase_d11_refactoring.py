@@ -2,7 +2,7 @@ import pytest
 import os
 from pathlib import Path
 
-from shared_core.dev_tools.refactoring_engine import RefactoringEngine, RefactoringRequest
+from shared_core.dev_tools.refactoring_engine import RefactoringEngine, RefactoringRequest, RefactoringOperation
 from shared_core.dev_tools.execution_gateway import ExecutionGateway
 from shared_core.dev_tools.autonomous_test_runner import AutonomousTestRunner
 from shared_core.event_bus import EventBus
@@ -33,7 +33,7 @@ def test_refactoring_rollbacks_on_test_failure(workspace):
     req = RefactoringRequest(
         repository_root=str(workspace),
         target_file="target.py",
-        operation="rename",
+        operation=RefactoringOperation.RENAME,
         target_symbol="old_func",
         new_name="new_func",
         test_command=["python", "-m", "pytest", "test_target.py", "-q"]
@@ -62,7 +62,7 @@ def test_refactoring_commits_on_test_pass(workspace):
     req = RefactoringRequest(
         repository_root=str(workspace),
         target_file="target.py",
-        operation="rename",
+        operation=RefactoringOperation.RENAME,
         target_symbol="old_func",
         new_name="new_func",
         test_command=["python", "-m", "pytest", "test_target.py", "-q"]

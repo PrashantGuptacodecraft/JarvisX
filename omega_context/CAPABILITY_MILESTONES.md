@@ -128,8 +128,8 @@ Validation: `tests/test_event_bus.py` (12 tests) + `tests/test_phase_a_integrati
 | D9 | Autonomous test execution | Detects pytest/unittest, runs them, parses results into a red/green map; auto-provisions a venv when needed. | ✅ PASS — `tests/test_phase_d9_autonomous_tests.py` passes |
 | D10 | Regression bisection | Given a newly-failing test, narrows to the responsible change/commit range automatically. | ✅ PASS — `tests/test_phase_d10_bisection.py` passes |
 | D11 | Refactoring engine (test-gated) | Performs a real AST transform (rename/extract/inline) via rope/libcst and only applies if tests stay green. | ✅ PASS — `tests/test_phase_d11_refactoring.py` passes |
-| D12 | Autonomous code suggestions | Generates context-grounded suggestions using the code-KG (not blind LLM); suggestion references real symbols. |
-| D13 | Coding-style model applied | Learns user conventions from the repo; generated code matches measured style (naming/format) checks. |
+| D12 | Autonomous code suggestions | Generates context-grounded suggestions using the code-KG (not blind LLM); suggestion references real symbols. | ✅ PASS — `tests/test_phase_d12_suggestions.py` passes |
+| D13 | Coding-style model applied | Learns user conventions from the repo; generated code matches measured style (naming/format) checks. | ✅ PASS — `tests/test_phase_d13_coding_style.py` passes |
 | D14 | Dev events on bus | `perception.dev.*` published and consumed (e.g. by predictive/state). |
 | D15 | Tests passing | Indexer, dep/call graph, bug-predictor, test-runner, refactor tests green. |
 | D16 | Legacy boot unchanged | GUI + headless unaffected. |

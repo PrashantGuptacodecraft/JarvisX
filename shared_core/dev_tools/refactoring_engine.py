@@ -3,19 +3,25 @@ import shutil
 import subprocess
 from pathlib import Path
 from dataclasses import dataclass
-from typing import List, Optional, Literal
+from typing import List, Optional
+from enum import Enum
 import difflib
 
 from .execution_gateway import ExecutionGateway
 from .autonomous_test_runner import AutonomousTestRunner
 from .test_execution_model import TestExecutionRequest, TestFramework, TestExecutionStatus
 
+class RefactoringOperation(str, Enum):
+    RENAME = "rename"
+    EXTRACT = "extract"
+    INLINE = "inline"
+
 @dataclass
 class RefactoringRequest:
     __test__ = False
     repository_root: str
     target_file: str
-    operation: str # "rename", "extract", "inline"
+    operation: RefactoringOperation
     target_symbol: str
     new_name: Optional[str] = None
     test_command: Optional[List[str]] = None
@@ -44,24 +50,34 @@ class RefactoringEngine:
         # 1. Apply Transformation
         transformed = False
         try:
-            # We attempt to use rope if available, otherwise fallback to simple safe string replace 
-            # for demonstration of the test-gated architecture
             try:
-                import rope.base.project
-                from rope.refactor.rename import Rename
-                # Note: Full rope integration is complex, we will fallback to basic string replace
-                # if the user hasn't explicitly set up the rope project correctly for this single file
-                raise ImportError("Falling back to naive AST-like string replace for speed")
+                import libcst as cst
             except ImportError:
-                # Naive implementation for milestone D11
-                if request.operation == "rename" and request.new_name:
-                    # Simple text replace for exact symbol to prove test-gating
-                    # In a real AST transform, we use libcst or rope
-                    new_content = original_content.replace(request.target_symbol, request.new_name)
+                return RefactoringResult(False, "dependency_unavailable: libcst is not installed", "")
+
+            if request.operation == RefactoringOperation.RENAME and request.new_name:
+                class RenameTransformer(cst.CSTTransformer):
+                    def __init__(self, old_name: str, new_name: str):
+                        self.old_name = old_name
+                        self.new_name = new_name
+                        
+                    def leave_Name(self, original_node: cst.Name, updated_node: cst.Name) -> cst.Name:
+                        if original_node.value == self.old_name:
+                            return updated_node.with_changes(value=self.new_name)
+                        return updated_node
+
+                module = cst.parse_module(original_content)
+                transformer = RenameTransformer(request.target_symbol, request.new_name)
+                modified_module = module.visit(transformer)
+                
+                new_content = modified_module.code
+                if new_content != original_content:
                     target_path.write_text(new_content, encoding="utf-8")
                     transformed = True
-                else:
-                    return RefactoringResult(False, f"Unsupported operation: {request.operation}", "")
+            elif request.operation in (RefactoringOperation.EXTRACT, RefactoringOperation.INLINE):
+                return RefactoringResult(False, f"not_supported: {request.operation} is not implemented yet", "")
+            else:
+                return RefactoringResult(False, f"Unsupported operation: {request.operation}", "")
         except Exception as e:
             return RefactoringResult(False, f"Transform failed: {e}", "")
             

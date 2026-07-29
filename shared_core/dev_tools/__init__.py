@@ -39,6 +39,9 @@ from .test_framework_detection import TestFrameworkDetector
 from .autonomous_test_runner import AutonomousTestRunner
 from .regression_bisection import RegressionBisector, BisectionRequest, BisectionResult
 from .refactoring_engine import RefactoringEngine, RefactoringRequest, RefactoringResult
+from .style_model import CodingStyleModel, StyleEvidence, StyleEvidenceSource
+from .style_analyzer import StyleAnalyzer
+from .style_application import StyleApplication
 
 __all__ = [
     "SymbolNode", "SymbolType", "SymbolLocation", "PythonASTParser", "TreeSitterParser", 
