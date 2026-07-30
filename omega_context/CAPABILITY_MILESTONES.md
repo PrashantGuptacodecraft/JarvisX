@@ -92,7 +92,7 @@ Validation: `tests/test_event_bus.py` (12 tests) + `tests/test_phase_a_integrati
 
 ---
 
-## PHASE C — MEMORY ENGINE + KNOWLEDGE GRAPH  (status: ✅ COMPLETE — 12/12 PASS/LOCKED)
+## PHASE C — MEMORY ENGINE + KNOWLEDGE GRAPH  (status: ✅ COMPLETE — C1–C14, 14/14 PASS/LOCKED)
 
 | # | Capability | Acceptance test | Status |
 |---|---|---|---|
@@ -130,48 +130,48 @@ Validation: `tests/test_event_bus.py` (12 tests) + `tests/test_phase_a_integrati
 | D11 | Refactoring engine (test-gated) | Performs a real AST transform (rename/extract/inline) via rope/libcst and only applies if tests stay green. | ✅ PASS — `tests/test_phase_d11_refactoring.py` passes |
 | D12 | Autonomous code suggestions | Generates context-grounded suggestions using the code-KG (not blind LLM); suggestion references real symbols. | ✅ PASS — `tests/test_phase_d12_suggestions.py` passes |
 | D13 | Coding-style model applied | Learns user conventions from the repo; generated code matches measured style (naming/format) checks. | ✅ PASS — `tests/test_phase_d13_coding_style.py` passes |
-| D14 | Dev events on bus | `perception.dev.*` published and consumed (e.g. by predictive/state). |
-| D15 | Tests passing | Indexer, dep/call graph, bug-predictor, test-runner, refactor tests green. |
-| D16 | Legacy boot unchanged | GUI + headless unaffected. |
+| D14 | Dev events on bus | `perception.dev.*` published and consumed (e.g. by predictive/state). | ✅ PASS — LOCKED |
+| D15 | Tests passing | Indexer, dep/call graph, bug-predictor, test-runner, refactor tests green. | ✅ PASS — LOCKED |
+| D16 | Legacy boot unchanged | GUI + headless unaffected. | ✅ PASS — LOCKED |
 
 ---
 
-## PHASE E — AUTONOMOUS TOOL FACTORY  (status: PENDING — 0/12)
+## PHASE E — AUTONOMOUS TOOL FACTORY  (status: COMPLETE — 12/12 LOCKED)
 
 | # | Capability | Acceptance test |
 |---|---|---|
-| E1 | ToolSpec / registry abstraction defined | Formal Tool interface (name/params/handler/permissions) + a registry the brain dispatches through. |
-| E2 | Existing controllers expressible as ToolSpecs | ≥3 current controllers adapted to ToolSpec without behavior change. |
-| E3 | Gap detection | Detects an intent with no handler OR a repeated manual sequence (from KG) and raises a tool-gap. |
-| E4 | Tool generation | model_router generates a ToolSpec-conforming module for the gap. |
-| E5 | Sandbox validation | Generated tool runs in the sandbox against generated tests; failures block promotion. |
-| E6 | Runtime registration | A validated tool registers into the live dispatch table without restart and is invocable. |
-| E7 | Persistence across restart | Generated tool saved to `generated/` + registry; present and usable after relaunch. |
-| E8 | Security gating + human confirm | Activation requires security-layer approval + explicit user confirmation; unconfirmed tools never run. |
-| E9 | `tool.created` event published | Emitted and observable on bus on successful registration. |
-| E10 | End-to-end demonstration | One genuine missing capability: detected → generated → validated → registered → invoked successfully in a session. |
-| E11 | Tests passing | Registry, gap-detect, validate, register, persistence tests green. |
-| E12 | Legacy boot unchanged | GUI + headless unaffected. |
+| E1 | ToolSpec / registry abstraction defined | Formal Tool interface (name/params/handler/permissions) + a registry the brain dispatches through. | ✅ PASS — `tests/test_phase_e1_tool_registry.py` passes |
+| E2 | Existing controllers expressible as ToolSpecs | ≥3 current controllers adapted to ToolSpec without behavior change. | ✅ PASS — `tests/test_phase_e2_tool_adapters.py` passes |
+| E3 | Gap detection | Detects an intent with no handler OR a repeated manual sequence (from KG) and raises a tool-gap. | ✅ PASS — `tests/test_phase_e3_gap_detection.py` passes |
+| E4 | Tool generation | model_router generates a ToolSpec-conforming module for the gap. | ✅ PASS — `tests/test_phase_e4_tool_generation.py` passes |
+| E5 | Sandbox validation | Generated tool runs in the sandbox against generated tests; failures block promotion. | ✅ PASS — `tests/test_phase_e5_sandbox_validation.py` passes |
+| E6 | Runtime registration | A validated tool registers into the live dispatch table without restart and is invocable. | ✅ PASS — `tests/test_phase_e6_runtime_registration.py` passes |
+| E7 | Persistence across restart | Generated tool saved to `generated/` + registry; present and usable after relaunch. | ✅ PASS — `tests/test_phase_e7_persistence.py` passes |
+| E8 | Security gating + human confirm | Activation requires security-layer approval + explicit user confirmation; unconfirmed tools never run. | ✅ PASS — `tests/test_phase_e8_security_gating.py` passes |
+| E9 | `tool.created` event published | Emitted and observable on bus on successful registration. | ✅ PASS — LOCKED |
+| E10 | End-to-end demonstration | One genuine missing capability: detected → generated → validated → registered → invoked successfully in a session. | ✅ PASS — LOCKED |
+| E11 | Tests passing | Registry, gap-detect, validate, register, persistence tests green. | ✅ PASS — LOCKED |
+| E12 | Legacy boot unchanged | GUI + headless unaffected. | ✅ PASS — LOCKED |
 
 ---
 
-## PHASE F — PREDICTIVE BEHAVIOR ENGINE  (status: PENDING — 0/13)
+## PHASE F — PREDICTIVE BEHAVIOR ENGINE (status: ✅ COMPLETE — 13/13 LOCKED)
 
-| # | Capability | Acceptance test |
-|---|---|---|
-| F1 | Predictor reads KG habit edges + world state | Predictions derived from Phase-C habit edges and Phase-B WorldState, not just raw command history. |
-| F2 | Temporal features integrated | Time-of-day / day-of-week measurably change predictions on seeded patterns. |
-| F3 | Contextual features integrated | Active app + recent bus events measurably change predictions. |
-| F4 | Next-action prediction with confidence | Produces ranked next actions with calibrated confidence scores. |
-| F5 | `predict.suggestion` events published | Suggestions emitted to bus and observable. |
-| F6 | `predict.preload` events published | Preload intents emitted to bus and observable. |
-| F7 | Proactive execution behind threshold | Only predictions above a confidence threshold trigger action; below-threshold never act. |
-| F8 | Reversible / interruptible guardrails | Every proactive action is announced, cancelable, and reversible; verified by triggering + cancel. |
-| F9 | Preload dev environment demonstrated | On a learned pattern, the dev environment is warmed before the user asks; observed in a session. |
-| F10 | Open-app-before-asked demonstrated | A habitually-used app opens proactively at the learned trigger; observed. |
-| F11 | Prediction accuracy measurable | A validation harness logs hit/miss and reports accuracy on a held-out session — objective, not vibes. |
-| F12 | Tests passing | Feature extraction, threshold gating, guardrail, accuracy-harness tests green. |
-| F13 | Legacy boot unchanged | GUI + headless unaffected. |
+| # | Capability | Acceptance test | Status |
+|---|---|---|---|
+| F1 | Predictor reads KG habit edges + world state | Predictions derived from Phase-C habit edges and Phase-B WorldState, not just raw command history. | ✅ PASS — LOCKED |
+| F2 | Temporal features integrated | Time-of-day / day-of-week measurably change predictions on seeded patterns. | ✅ PASS — LOCKED |
+| F3 | Contextual features integrated | Active app + recent bus events measurably change predictions. | ✅ PASS — LOCKED |
+| F4 | Next-action prediction with confidence | Produces ranked next actions with calibrated confidence scores. | ✅ PASS — LOCKED |
+| F5 | `predict.suggestion` events published | Suggestions emitted to bus and observable. | ✅ PASS — LOCKED |
+| F6 | `predict.preload` events published | Preload intents emitted to bus and observable. | ✅ PASS — LOCKED |
+| F7 | Proactive execution behind threshold | Only predictions above a confidence threshold trigger action; below-threshold never act. | ✅ PASS — LOCKED |
+| F8 | Reversible / interruptible guardrails | Every proactive action is announced, cancelable, and reversible; verified by triggering + cancel. | ✅ PASS — LOCKED |
+| F9 | Preload dev environment demonstrated | On a learned pattern, the dev environment is warmed before the user asks; observed in a session. | ✅ PASS — LOCKED |
+| F10 | Open-app-before-asked demonstrated | A habitually-used app opens proactively at the learned trigger; observed. | ✅ PASS — LOCKED |
+| F11 | Prediction accuracy measurable | A validation harness logs hit/miss and reports accuracy on a held-out session — objective, not vibes. | ✅ PASS — LOCKED |
+| F12 | Tests passing | Feature extraction, threshold gating, guardrail, accuracy-harness tests green. | ✅ PASS — LOCKED |
+| F13 | Legacy boot unchanged | GUI + headless unaffected. | ✅ PASS — LOCKED |
 
 ---
 
@@ -180,3 +180,11 @@ JARVIS MODE is declared research-lab level when **all milestones in Phases A–F
 (A:10 + B:24 [B1–B14 + BL1–BL10] + C:14 + D:16 + E:12 + F:13 = **89 capability milestones**).
 Only then does the OMEGA freeze lift. Validation is by acceptance test per milestone —
 no abstract percentage is recorded anywhere in this program.
+
+---
+
+## PHASE 7 — OMEGA MODE BOOTSTRAP (status: IN PROGRESS)
+
+| # | Capability | Acceptance test | Status |
+|---|---|---|---|
+| 30 | Reasoning-Trace Recorder + Continuity for cognition | OMEGA cognition session can atomically record bounded, redacted structured cognition traces to isolated persistence. Seamless restoration via `ContinuityManager` resumes state exactly without affecting JARVIS boot. | ✅ PASS/LOCKED |

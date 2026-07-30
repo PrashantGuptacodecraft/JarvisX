@@ -73,13 +73,13 @@ class Scheduler:
         if self._running:
             return
         self._running = True
-        self._thread = threading.Thread(target=self._loop, name="scheduler-loop", daemon=True)
+        self._thread = threading.Thread(target=self._loop, name="scheduler-loop", daemon=False)
         self._thread.start()
         log.info("Scheduler started.")
 
     def stop(self, wait: bool = True) -> None:
         self._running = False
-        if wait and self._thread:
+        if self._thread and self._thread.is_alive():
             self._thread.join(timeout=2.0)
         self._pool.shutdown(wait=wait, cancel_futures=not wait)
 
@@ -143,13 +143,16 @@ class Scheduler:
 
     # ── core dispatch loop ───────────────────────────────────────────────────
     def _loop(self) -> None:
-        while self._running:
-            tick_start = time.monotonic()
-            self._tick_count += 1
-            due = self._collect_due_tasks(tick_start)
-            self._dispatch_batch(due, tick_start)
-            self._run_attachments()
-            self._sleep_adaptive(0.02)  # 20ms tick granularity
+        try:
+            while self._running:
+                tick_start = time.monotonic()
+                self._tick_count += 1
+                due = self._collect_due_tasks(tick_start)
+                self._dispatch_batch(due, tick_start)
+                self._run_attachments()
+                self._sleep_adaptive(0.02)  # 20ms tick granularity
+        finally:
+            log.info("Scheduler loop exited cleanly.")
 
     def _run_attachments(self) -> None:
         """Invoke B12 hook attachments (queue monitors + coalescer flush). No-op if none."""
@@ -218,7 +221,13 @@ class Scheduler:
                 task.missed_ticks += missed
             task.next_run += (missed + 1) * task.interval
             task.running = True
-            fut = self._pool.submit(self._execute, task, now)
+            try:
+                fut = self._pool.submit(self._execute, task, now)
+            except RuntimeError as e:
+                if "cannot schedule new futures after shutdown" in str(e):
+                    log.debug("Scheduler pool is shutting down, skipping submit.")
+                    break
+                raise
             with self._lock:
                 self._pending[task.id] = fut
             queue_size += 1

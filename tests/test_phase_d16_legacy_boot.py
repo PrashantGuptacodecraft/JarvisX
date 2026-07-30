@@ -34,6 +34,10 @@ def test_d16_headless_boot_does_not_bind_api_port():
     t0 = time.time()
     if hasattr(core, 'stop'):
         core.stop()
+    if core.brain and core.brain.scheduler:
+        core.brain.scheduler.stop()
+    if core.brain and 'code_analyzer' in core.brain.tools:
+        core.brain.tools['code_analyzer'].stop()
     listener.stop()
     if hasattr(speaker, 'stop'):
         speaker.stop()

@@ -84,7 +84,7 @@ def test_c10_scheduler_lifecycle():
     from main import build_jarvis
     import queue
     cq = queue.Queue()
-    core, listener, speaker, memory, _, _ = build_jarvis(gui=None, command_queue=cq)
+    core, listener, speaker, memory, cq_out, gesture_ctrl = build_jarvis(gui=None, command_queue=cq, headless=True)
     
     # Verify registered
     scheduler = core.brain.scheduler
@@ -97,3 +97,5 @@ def test_c10_scheduler_lifecycle():
     assert task.interval == 86400.0
     
     scheduler.stop()
+    if 'code_analyzer' in core.brain.tools:
+        core.brain.tools['code_analyzer'].stop()

@@ -137,7 +137,7 @@ def test_scheduler_lifecycle():
     from main import build_jarvis
     import queue
     cq = queue.Queue()
-    core, listener, speaker, memory, _, _ = build_jarvis(gui=None, command_queue=cq)
+    core, listener, speaker, memory, cq_out, gesture_ctrl = build_jarvis(gui=None, command_queue=cq, headless=True)
     
     # Verify registered
     scheduler = core.brain.scheduler
@@ -149,6 +149,9 @@ def test_scheduler_lifecycle():
     # Cadence configurable and default 24h
     assert task.interval == 86400.0
     
-    # Shutdown unregisters/disables callback 
+    assert scheduler.health()["running"] is True
+    
     scheduler.stop()
-    assert scheduler._running is False
+    if 'code_analyzer' in core.brain.tools:
+        core.brain.tools['code_analyzer'].stop()
+    assert scheduler.health()["running"] is False
