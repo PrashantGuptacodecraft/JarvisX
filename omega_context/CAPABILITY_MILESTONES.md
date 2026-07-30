@@ -188,3 +188,5 @@ no abstract percentage is recorded anywhere in this program.
 | # | Capability | Acceptance test | Status |
 |---|---|---|---|
 | 30 | Reasoning-Trace Recorder + Continuity for cognition | OMEGA cognition session can atomically record bounded, redacted structured cognition traces to isolated persistence. Seamless restoration via `ContinuityManager` resumes state exactly without affecting JARVIS boot. | ✅ PASS/LOCKED |
+| 31 | Poly-Cognitive Engine | Accepts one structured request and concurrently invokes 5 isolated cognitive roles. Enforces bounded deadlines, cooperative cancellation, and strict preservation of partial failures without affecting legacy JARVIS boot. | ✅ PASS/LOCKED |
+| 32 | Synthesis Matrix [O] — debate → converge | Accepts finalized M31 result, applies strict eligibility gates, and constructs a bounded debate matrix. Routes through CognitiveSynthesisRouter to yield one deterministic, json-serializable CognitionSynthesis without raw chain-of-thought or provider leakage. | ✅ PASS/LOCKED |
