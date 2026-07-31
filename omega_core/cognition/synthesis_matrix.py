@@ -94,6 +94,8 @@ class SynthesisMatrix:
         
         weighted_conf_sum = 0.0
         total_weight = 0.0
+        logic_conf = 1.0
+        skepticism_conf = 1.0
         
         for r in result.role_results:
             if r.response is not None:
@@ -101,6 +103,10 @@ class SynthesisMatrix:
                 weight = role_weights.get(r.role, 0.0)
                 weighted_conf_sum += r.response.confidence * weight
                 total_weight += weight
+                if r.role == CognitiveRole.LOGIC:
+                    logic_conf = r.response.confidence
+                elif r.role == CognitiveRole.SKEPTICISM:
+                    skepticism_conf = r.response.confidence
                 
         debate_matrix = DebateMatrix(
             trace_id=result.trace_id,
@@ -137,7 +143,12 @@ class SynthesisMatrix:
         penalty_unsupported = 0.20 if len(router_response.supporting_roles) == 0 else 0.0
         
         final_confidence = avg_confidence - penalty_missing - penalty_contradictions - penalty_evidence - penalty_risks - penalty_unsupported
+        
+        safety_cap = max(logic_conf, skepticism_conf)
+        final_confidence = min(final_confidence, safety_cap)
         final_confidence = max(0.0, min(1.0, final_confidence))
+        final_confidence = round(final_confidence, 2)
+        
         return CognitionSynthesis(
             trace_id=result.trace_id,
             status=SynthesisStatus.SUCCESS,
