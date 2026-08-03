@@ -144,7 +144,7 @@ class SynthesisMatrix:
         
         final_confidence = avg_confidence - penalty_missing - penalty_contradictions - penalty_evidence - penalty_risks - penalty_unsupported
         
-        safety_cap = max(logic_conf, skepticism_conf)
+        safety_cap = min(logic_conf, skepticism_conf)
         final_confidence = min(final_confidence, safety_cap)
         final_confidence = max(0.0, min(1.0, final_confidence))
         final_confidence = round(final_confidence, 2)

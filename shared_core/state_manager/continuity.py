@@ -93,7 +93,16 @@ class ContinuityManager:
                 f.write(encoded)
                 f.flush()
                 os.fsync(f.fileno())
-            os.replace(tmp, self.path)   # atomic
+            
+            # Windows workaround: retry os.replace if file is locked
+            for attempt in range(10):
+                try:
+                    os.replace(tmp, self.path)   # atomic
+                    break
+                except PermissionError:
+                    if attempt == 9:
+                        raise
+                    time.sleep(0.05)
             return True
         except Exception as exc:
             log.warning(f"continuity save failed: {exc}")
