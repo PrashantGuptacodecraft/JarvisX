@@ -170,6 +170,16 @@ def test_poly_engine_cancelled_after_partial_complete(dummy_trace, monkeypatch):
                 cancellation_token.cancel()
                 time.sleep(0.5)
                 raise Exception("Cancelled")
+            
+            # Logic and Skepticism must succeed for eligible=True. Prevent them from raising Cancelled.
+            if request.role in (CognitiveRole.LOGIC, CognitiveRole.SKEPTICISM):
+                return CognitiveModelResponse(
+                    role=request.role,
+                    hypothesis_or_critique=f"Response from {request.role}",
+                    confidence=0.9,
+                    computation_time_ms=10.0
+                )
+            
             return super().generate_role_response(
                 request, timeout_seconds=timeout_seconds, cancellation_token=cancellation_token
             )

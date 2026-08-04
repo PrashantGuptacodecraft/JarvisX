@@ -94,15 +94,8 @@ class ContinuityManager:
                 f.flush()
                 os.fsync(f.fileno())
             
-            # Windows workaround: retry os.replace if file is locked
-            for attempt in range(10):
-                try:
-                    os.replace(tmp, self.path)   # atomic
-                    break
-                except PermissionError:
-                    if attempt == 9:
-                        raise
-                    time.sleep(0.05)
+            # Atomic replace now safe without retries as thread is joined correctly on stop
+            os.replace(tmp, self.path)
             return True
         except Exception as exc:
             log.warning(f"continuity save failed: {exc}")
@@ -167,6 +160,9 @@ class ContinuityManager:
 
     def stop(self, final_save: bool = True) -> None:
         self._running = False
+        if self._autosave_thread and self._autosave_thread.is_alive():
+            self._autosave_thread.join(timeout=2.0)
+            self._autosave_thread = None
         if final_save:
             self.save()
 
