@@ -87,23 +87,41 @@ class ContinuityManager:
             log.warning(f"continuity save failed: snapshot size ({encoded_size} bytes) exceeds limit ({self.max_snapshot_bytes} bytes).")
             return False
 
-        tmp = self.path + ".tmp"
+        import tempfile
         try:
-            with open(tmp, "wb") as f:
+            # Use unique temp file to avoid concurrent save() collisions
+            fd, tmp = tempfile.mkstemp(
+                dir=os.path.dirname(self.path),
+                prefix=".continuity_",
+                suffix=".tmp"
+            )
+            with os.fdopen(fd, "wb") as f:
                 f.write(encoded)
                 f.flush()
                 os.fsync(f.fileno())
             
-            # Atomic replace now safe without retries as thread is joined correctly on stop
-            os.replace(tmp, self.path)
-            return True
-        except Exception as exc:
-            log.warning(f"continuity save failed: {exc}")
+            # Retry os.replace with backoff for Windows file-lock resilience
+            # (OneDrive sync, antivirus, concurrent reads can briefly lock the target)
+            import time as _time
+            last_exc = None
+            for attempt in range(4):
+                try:
+                    os.replace(tmp, self.path)
+                    return True
+                except PermissionError as pe:
+                    last_exc = pe
+                    if attempt < 3:
+                        _time.sleep(0.05 * (2 ** attempt))  # 50ms, 100ms, 200ms
+            
+            log.warning(f"continuity save failed after retries: {last_exc}")
             try:
                 if os.path.exists(tmp):
                     os.remove(tmp)
             except Exception:
                 pass
+            return False
+        except Exception as exc:
+            log.warning(f"continuity save failed: {exc}")
             return False
 
     # ── load / restore (B11) ─────────────────────────────────────────────────

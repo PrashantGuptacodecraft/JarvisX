@@ -72,10 +72,31 @@ class OmegaContainmentKernel:
     def run_cognitive_cycle(self, request: ContainedOmegaRequest) -> ContainedOmegaResult:
         """Executes the full M31 -> M32 -> M33 pipeline within containment."""
         try:
-            poly_result = self.poly_engine.execute_round(
-                objective=request.objective,
+            # Construct proper objects for the poly_engine API
+            from .models import CognitionTrace, CognitionStatus
+            from .poly_models import CancellationToken
+            import time as _time
+            now = _time.time()
+            trace = CognitionTrace(
+                schema_version=1,
                 trace_id=request.trace_id,
-                timeout_ms=1000.0
+                session_id=f"containment-{request.trace_id}",
+                parent_trace_id=None,
+                sequence_number=0,
+                goal_id=request.trace_id,
+                problem_summary=request.objective[:500],
+                evidence=(),
+                decision=None,
+                status=CognitionStatus.CREATED,
+                outcome_summary=None,
+                created_at=now,
+                updated_at=now
+            )
+            cancellation_token = CancellationToken()
+            poly_result = self.poly_engine.execute_round(
+                trace=trace,
+                timeout_seconds=1.0,
+                cancellation_token=cancellation_token
             )
             
             if not poly_result.is_eligible_for_synthesis:

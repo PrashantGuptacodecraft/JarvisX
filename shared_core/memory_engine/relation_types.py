@@ -7,3 +7,4 @@ class RelationType(str, Enum):
     PRECEDES = "precedes"
     AUTHORED_BY = "authored_by"
     LOCATED_IN = "located_in"
+    INSTANCE_OF = "instance_of"

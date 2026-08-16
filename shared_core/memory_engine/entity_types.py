@@ -9,3 +9,4 @@ class EntityType(str, Enum):
     TOOL = "Tool"
     EVENT = "Event"
     HABIT = "Habit"
+    CONCEPT = "Concept"

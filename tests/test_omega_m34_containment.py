@@ -54,10 +54,10 @@ class FakePolyEngine(PolyCognitiveEngine):
     def __init__(self, result_status):
         self.call_count = 0
         self.result_status = result_status
-    def execute_round(self, objective, trace_id, timeout_ms):
+    def execute_round(self, trace, timeout_seconds=1.0, cancellation_token=None):
         self.call_count += 1
         return PolyCognitionResult(
-            trace_id=trace_id, status=self.result_status, role_results=(),
+            trace_id=trace.trace_id, status=self.result_status, role_results=(),
             is_eligible_for_synthesis=(self.result_status == PolyRoundStatus.COMPLETE),
             cancellation_requested=False, total_time_ms=10.0
         )

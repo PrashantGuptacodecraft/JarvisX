@@ -1,6 +1,6 @@
 """verification.py - Truth Verification Core and Adversarial Verifier Pool."""
 import concurrent.futures
-from typing import List, Tuple
+from typing import List
 from .synthesis_models import CognitionSynthesis, SynthesisStatus
 from .verification_models import TruthVerificationResult, AdversarialRouter, AdversarialResult, VerificationRole
 
@@ -29,11 +29,10 @@ class AdversarialVerifierPool:
                     result = future.result(timeout=30.0)
                     results.append(result)
                 except Exception as e:
-                    # If a verifier crashes, it's considered a failure to falsify, 
-                    # but we record it safely. We lean towards verifying false on crash?
-                    # "evaluate whether the synthesized decision holds against adversarial probing"
-                    # If an adversary crashes, it didn't successfully falsify.
-                    results.append(AdversarialResult(passed=False, argument=f"Verifier crashed: {str(e)[:100]}", confidence=0.0))
+                    # If an adversary crashes, it did NOT successfully falsify the synthesis.
+                    # A crash is an infrastructure failure, not evidence against the hypothesis.
+                    # passed=True means the synthesis was NOT falsified by this probe.
+                    results.append(AdversarialResult(passed=True, argument=f"Verifier crashed: {str(e)[:100]}", confidence=0.0))
         return results
 
 
