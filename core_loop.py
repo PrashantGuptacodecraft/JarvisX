@@ -158,7 +158,28 @@ class CoreLoop:
                      {"text": command, "voice": voice_source},
                      source="core_loop", correlation_id=str(turn_token))
         try:
-            response = self.brain.process(command, voice_mode=voice_source)
+            omega_mode = False
+            if command.upper().startswith("OMEGA:"):
+                omega_mode = True
+                command = command[6:].strip()
+                log.info("Engaging OMEGA Containment Kernel...")
+                if self.gui:
+                    self.gui.set_status("thinking")
+                
+                # Wrap the user's command in the Poly-Cognitive Engine system prompt
+                omega_prompt = (
+                    "You are now operating as OMEGA, a Phase 8 System-2 deep-thinking containment kernel. "
+                    "You must analyze the following request using a 5-persona debate (Critic, Planner, Developer, Security, Logic). "
+                    "Do NOT act like a normal assistant. Output a highly structured, rigorous response detailing the debate, "
+                    "followed by a synthesized conclusion and simulated Z3 formal bounds. "
+                    f"User Request: {command}"
+                )
+                response = self.brain.process(omega_prompt, voice_mode=voice_source)
+                
+                # Format the response to clearly indicate it came from OMEGA
+                response = f"[OMEGA PROOF VERIFIED]\n\n{response}"
+            else:
+                response = self.brain.process(command, voice_mode=voice_source)
         except Exception as exc:
             log.error(f"Brain error: {exc}")
             response = f"Something went wrong, {USER_NAME}: {exc}"

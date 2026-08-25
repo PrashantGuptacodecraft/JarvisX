@@ -110,6 +110,8 @@ class AIClient:
         self.provider = "none"
         self.last_error = ""
         self.last_error_kind = ""
+        self._gemini_keys = [k.strip() for k in str(GEMINI_KEY).split(",") if k.strip()] if GEMINI_KEY else []
+        self._current_gemini_key_idx = 0
         self.providers = self._build_provider_order()
         self._activate_first_available()
         log.info(f"AI provider active: {self.provider}")
@@ -145,8 +147,8 @@ class AIClient:
         try:
             if provider == "gemini":
                 from google import genai
-
-                self.client = genai.Client(api_key=GEMINI_KEY)
+                current_key = self._gemini_keys[self._current_gemini_key_idx] if self._gemini_keys else GEMINI_KEY
+                self.client = genai.Client(api_key=current_key)
             elif provider == "openai":
                 from openai import OpenAI
 
@@ -248,7 +250,8 @@ class AIClient:
         max_tokens = VOICE_RESPONSE_MAX_TOKENS if voice_mode else 600
         last_error = None
 
-        for _ in range(max(1, len(self.providers))):
+        max_attempts = max(1, len(self.providers)) + (len(self._gemini_keys) if hasattr(self, '_gemini_keys') else 0)
+        for _ in range(max_attempts):
             current_provider = self.provider
             try:
                 if current_provider == "gemini":
@@ -319,10 +322,21 @@ class AIClient:
 
             except Exception as e:
                 last_error = e
+                err_kind = self._classify_error(e)
+                
+                # Pop the appended user message from history on failure
                 if current_provider == "gemini" and self.history and self.history[-1]["role"] == "user":
                     self.history.pop()
-                elif current_provider in ("openai", "groq", "xai") and self.history and self.history[-1].get("role") == "user":
+                elif current_provider in ("openai", "groq", "xai", "ollama") and self.history and self.history[-1].get("role") == "user":
                     self.history.pop()
+                    
+                # KEY ROTATION LOGIC
+                if current_provider == "gemini" and err_kind == "quota" and hasattr(self, '_gemini_keys') and len(self._gemini_keys) > 1:
+                    log.warning(f"Gemini key limit hit. Rotating to next Gemini API key...")
+                    self._current_gemini_key_idx = (self._current_gemini_key_idx + 1) % len(self._gemini_keys)
+                    self._init_client("gemini")
+                    continue
+                    
                 if not self._fallback_from(current_provider, e):
                     break
 
@@ -344,7 +358,8 @@ class AIClient:
         if GEMINI_KEY:
             try:
                 from google import genai as _gv
-                _vis_client = _gv.Client(api_key=GEMINI_KEY)
+                current_key = self._gemini_keys[self._current_gemini_key_idx] if hasattr(self, '_gemini_keys') and self._gemini_keys else GEMINI_KEY
+                _vis_client = _gv.Client(api_key=current_key)
             except Exception as _ge:
                 log.warning("Could not init Gemini vision client: %s", _ge)
 

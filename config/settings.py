@@ -48,7 +48,7 @@ XAI_KEY:      str = os.getenv("XAI_API_KEY",     "")
 
 GEMINI_MODEL: str = os.getenv("GEMINI_MODEL",  "gemini-3.6-flash")
 OPENAI_MODEL: str = os.getenv("OPENAI_MODEL",  "gpt-4o-mini")
-GROQ_MODEL:   str = os.getenv("GROQ_MODEL",    "llama-3.3-70b-versatile")
+GROQ_MODEL:   str = os.getenv("GROQ_MODEL",    "llama-3.1-70b-versatile")
 XAI_MODEL:    str = os.getenv("XAI_MODEL",     "grok-beta")
 XAI_BASE_URL: str = os.getenv("XAI_BASE_URL",  "https://api.x.ai/v1")
 
