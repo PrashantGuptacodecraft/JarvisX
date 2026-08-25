@@ -110,7 +110,7 @@ class Listener:
             if previous_error:
                 self._status("listening" if (self.always_listening or self.active_mode) else "sleeping")
         except Exception as exc:
-            log.error(f"Mic init failed: {exc}")
+            log.info("PyAudio not found, switching to sounddevice fallback microphone backend...")
             if self._init_sounddevice_fallback():
                 return
 

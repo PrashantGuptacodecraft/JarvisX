@@ -46,7 +46,7 @@ OPENAI_KEY:   str = os.getenv("OPENAI_API_KEY",  "")
 GROQ_KEY:     str = os.getenv("GROQ_API_KEY",    "")
 XAI_KEY:      str = os.getenv("XAI_API_KEY",     "")
 
-GEMINI_MODEL: str = os.getenv("GEMINI_MODEL",  "gemini-2.0-flash")
+GEMINI_MODEL: str = os.getenv("GEMINI_MODEL",  "gemini-3.6-flash")
 OPENAI_MODEL: str = os.getenv("OPENAI_MODEL",  "gpt-4o-mini")
 GROQ_MODEL:   str = os.getenv("GROQ_MODEL",    "llama-3.3-70b-versatile")
 XAI_MODEL:    str = os.getenv("XAI_MODEL",     "grok-beta")

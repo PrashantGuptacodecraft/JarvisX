@@ -7,7 +7,12 @@ Headless:     python main.py --headless
 import argparse
 import queue
 import shutil
+import os
 from pathlib import Path
+
+# Silence annoying TensorFlow and MediaPipe C++ telemetry / clearcut logs
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+os.environ["GLOG_minloglevel"] = "3"
 
 from config.settings import JARVIS_NAME, KNOWLEDGE_DIR, OPERATOR_MODE, USER_NAME, VOICE_ALWAYS_ON, WAKE_WORD
 from config.logger import get_logger
